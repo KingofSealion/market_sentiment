@@ -26,6 +26,7 @@ import {
 } from '@mui/material';
 import {
   Send as SendIcon,
+  Stop as StopIcon,
   TrendingUp as TrendingUpIcon,
   TrendingDown as TrendingDownIcon,
   Refresh as RefreshIcon,
@@ -156,6 +157,7 @@ export default function AgriCommoditiesDashboard() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
   
   // Loading States
   const [isLoadingCards, setIsLoadingCards] = useState(true);
@@ -249,6 +251,10 @@ export default function AgriCommoditiesDashboard() {
     setChatInput('');
     setIsChatLoading(true);
 
+    // Create new AbortController for this request
+    const controller = new AbortController();
+    setAbortController(controller);
+
     try {
       const response = await fetch(`${API_BASE_URL}/api/chat`, {
         method: 'POST',
@@ -256,6 +262,7 @@ export default function AgriCommoditiesDashboard() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ message: userMessage.message }),
+        signal: controller.signal, // Add abort signal
       });
 
       if (!response.ok) {
@@ -277,43 +284,68 @@ export default function AgriCommoditiesDashboard() {
 
       setChatMessages(prev => [...prev, botMessage]);
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      try {
+        while (true) {
+          // Check if request was aborted
+          if (controller.signal.aborted) {
+            throw new Error('Request was cancelled');
+          }
 
-        const chunk = new TextDecoder().decode(value);
-        const lines = chunk.split('\n');
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.type === 'chunk' || data.type === 'end') {
-                botMessageContent = data.message;
-                setChatMessages(prev =>
-                  prev.map(msg =>
-                    msg.id === botMessage.id
-                      ? { ...msg, message: botMessageContent }
-                      : msg
-                  )
-                );
+          const chunk = new TextDecoder().decode(value);
+          const lines = chunk.split('\n');
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.type === 'chunk' || data.type === 'end') {
+                  botMessageContent = data.message;
+                  setChatMessages(prev =>
+                    prev.map(msg =>
+                      msg.id === botMessage.id
+                        ? { ...msg, message: botMessageContent }
+                        : msg
+                    )
+                  );
+                }
+              } catch (e) {
+                console.error('Error parsing SSE data:', e);
               }
-            } catch (e) {
-              console.error('Error parsing SSE data:', e);
             }
           }
         }
+      } finally {
+        reader.releaseLock();
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error sending chat message:', error);
-      const errorMessage: ChatMessage = {
+      
+      // Handle different error types
+      let errorMessage = '죄송합니다. 오류가 발생했습니다. 다시 시도해주세요.';
+      if (error.name === 'AbortError' || error.message === 'Request was cancelled') {
+        errorMessage = '요청이 취소되었습니다.';
+      }
+      
+      const errorMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
-        message: '죄송합니다. 오류가 발생했습니다. 다시 시도해주세요.',
+        message: errorMessage,
         isUser: false,
         timestamp: new Date(),
       };
-      setChatMessages(prev => [...prev, errorMessage]);
+      setChatMessages(prev => [...prev, errorMsg]);
     } finally {
+      setIsChatLoading(false);
+      setAbortController(null);
+    }
+  };
+
+  const stopChatMessage = () => {
+    if (abortController) {
+      abortController.abort();
+      setAbortController(null);
       setIsChatLoading(false);
     }
   };
@@ -1352,11 +1384,14 @@ export default function AgriCommoditiesDashboard() {
           className="bg-white"
         />
         <IconButton
-          onClick={sendChatMessage}
-          disabled={!chatInput.trim() || isChatLoading}
-          className="bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300"
+          onClick={isChatLoading ? stopChatMessage : sendChatMessage}
+          disabled={!isChatLoading && !chatInput.trim()}
+          className={`text-white hover:bg-blue-600 disabled:bg-gray-300 ${
+            isChatLoading ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-500'
+          }`}
+          title={isChatLoading ? '응답 생성 중지' : '메시지 보내기'}
         >
-          <SendIcon />
+          {isChatLoading ? <StopIcon /> : <SendIcon />}
         </IconButton>
       </div>
     </div>
