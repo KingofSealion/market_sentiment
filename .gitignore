@@ -210,10 +210,10 @@ temp/
 ehthumbs.db
 Thumbs.db
 
-# Database files
-*.sqlite
-*.sqlite3
-*.db
+# Database files (commented out to include ChromaDB)
+# *.sqlite
+# *.sqlite3
+# *.db
 
 # ChromaDB files
-chroma_db/
+# chroma_db/
