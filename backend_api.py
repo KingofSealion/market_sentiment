@@ -1,3 +1,5 @@
+#웹 API 서버로 실행되는 챗봇 (FastAPI 기반)
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -89,7 +91,7 @@ async def startup_event():
         
         # Initialize LLM
         print("[INFO] Initializing ChatOpenAI model...")
-        llm = ChatOpenAI(model="gpt-4o", temperature=0.3)
+        llm = ChatOpenAI(model="gpt-4.1", temperature=0.2)
         print("[INFO] ChatOpenAI model initialized")
         
         # Load documents from PostgreSQL

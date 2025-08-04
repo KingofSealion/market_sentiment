@@ -1,3 +1,4 @@
+# 터미널에서 직접 실행하는 콘솔 챗봇 (CLI 인터페이스)
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,7 +18,7 @@ def run_bot():
         return
 
     # 2. 모델 선택 
-    model_name = "gpt-4o"
+    model_name = "gpt-4.1"
     llm = ChatOpenAI(model=model_name, temperature=0.3)
     print(f"[INFO] OpenAI 모델: {model_name}")
 
