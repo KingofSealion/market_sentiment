@@ -328,7 +328,25 @@ async def get_trending_keywords():
     try:
         conn = get_db_connection()
         
-        # Get keywords from recent articles (last 7 days)
+        # First, get the most recent news date in the database
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT MAX(r.published_time) 
+            FROM raw_news r 
+            WHERE r.analysis_status = TRUE
+        """)
+        max_date_result = cursor.fetchone()
+        cursor.close()
+        
+        if not max_date_result[0]:
+            conn.close()
+            return []  # No analyzed news found
+        
+        most_recent_date = max_date_result[0]
+        # Get keywords from 7 days before the most recent news date
+        seven_days_before_recent = most_recent_date - timedelta(days=7)
+        
+        # Get keywords from recent articles (based on most recent news date)
         query = """
         SELECT nar.keywords
         FROM news_analysis_results nar
@@ -336,8 +354,7 @@ async def get_trending_keywords():
         WHERE r.published_time >= %s AND r.analysis_status = TRUE
         """
         
-        week_ago = datetime.now() - timedelta(days=7)
-        df = pd.read_sql(query, conn, params=[week_ago])
+        df = pd.read_sql(query, conn, params=[seven_days_before_recent])
         conn.close()
         
         # Process keywords and count frequencies
