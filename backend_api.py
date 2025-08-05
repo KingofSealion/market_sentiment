@@ -20,6 +20,7 @@ from app.agent_logic import create_analyst_agent
 from langchain_openai import ChatOpenAI
 
 from dotenv import load_dotenv  
+import re
 load_dotenv()
 
 app = FastAPI(title="Agri Commodities Sentiment Dashboard API", version="1.0.0")
@@ -76,6 +77,58 @@ class TrendingKeyword(BaseModel):
 # Initialize agent once
 agent_executor = None
 
+def format_response_text(text):
+    """LLM 응답을 더 읽기 좋게 포맷팅"""
+    if not text:
+        return text
+    
+    # 기본 정리
+    text = text.strip()
+    
+    # 문장 끝에서 줄바꿈 추가 (마침표, 느낌표, 물음표 후)
+    text = re.sub(r'([.!?])\s+([A-Z가-힣])', r'\1\n\n\2', text)
+    
+    # 숫자 목록 앞에 줄바꿈 추가 (1., 2., 3. 등)
+    text = re.sub(r'([.!?])\s*(\d+\.)', r'\1\n\n\2', text)
+    
+    # 항목 표시 앞에 줄바꿈 추가 (-, *, • 등)
+    text = re.sub(r'([.!?])\s*([-*•])', r'\1\n\n\2', text)
+    
+    # "또한", "그리고", "하지만", "그러나" 등 접속사 앞에 줄바꿈
+    text = re.sub(r'([.!?])\s*(또한|그리고|하지만|그러나|따라서|그러므로|예를 들어)', r'\1\n\n\2', text)
+    
+    # 콜론(:) 뒤에 줄바꿈 추가
+    text = re.sub(r':\s*([A-Z가-힣])', r':\n\n\1', text)
+    
+    # 연속된 줄바꿈 정리 (3개 이상의 줄바꿈을 2개로)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    # 긴 단락 나누기 (100자 이상의 연속 텍스트)
+    paragraphs = text.split('\n\n')
+    formatted_paragraphs = []
+    
+    for para in paragraphs:
+        if len(para) > 150:  # 긴 단락인 경우
+            # 쉼표나 세미콜론 뒤에서 적절히 나누기
+            sentences = re.split(r'([,;])\s+', para)
+            current_chunk = ""
+            
+            for i, sentence in enumerate(sentences):
+                if sentence in [',', ';']:
+                    current_chunk += sentence
+                    if len(current_chunk) > 80:  # 적당한 길이가 되면 줄바꿈
+                        formatted_paragraphs.append(current_chunk.strip())
+                        current_chunk = ""
+                else:
+                    current_chunk += sentence
+            
+            if current_chunk.strip():
+                formatted_paragraphs.append(current_chunk.strip())
+        else:
+            formatted_paragraphs.append(para)
+    
+    return '\n\n'.join(formatted_paragraphs)
+
 @app.on_event("startup")
 async def startup_event():
     global agent_executor
@@ -91,7 +144,7 @@ async def startup_event():
         
         # Initialize LLM
         print("[INFO] Initializing ChatOpenAI model...")
-        llm = ChatOpenAI(model="gpt-4.1", temperature=0.2)
+        llm = ChatOpenAI(model="gpt-4.1", temperature=0.3)
         print("[INFO] ChatOpenAI model initialized")
         
         # Load documents from PostgreSQL
@@ -408,8 +461,12 @@ async def chat_stream(request: ChatRequest):
             response_text = result.get('output', 'Sorry, I could not process your request.')
             print(f"[INFO] Response text (first 200 chars): {response_text[:200]}...")
             
+            # 응답 텍스트 포맷팅
+            formatted_text = format_response_text(response_text)
+            print(f"[INFO] Formatted text (first 200 chars): {formatted_text[:200]}...")
+            
             # Simulate streaming by sending chunks
-            words = response_text.split()
+            words = formatted_text.split()
             current_text = ""
             for i, word in enumerate(words):
                 current_text += word + " "

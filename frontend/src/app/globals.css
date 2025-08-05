@@ -31,6 +31,8 @@ body {
 .gap-3 { gap: 0.75rem; }
 .gap-4 { gap: 1rem; }
 .gap-6 { gap: 1.5rem; }
+.items-end { align-items: flex-end; }
+.space-x-1 > * + * { margin-left: 0.25rem; }
 
 /* Grid */
 .grid { display: grid; }
@@ -51,6 +53,31 @@ body {
   .lg\\:col-span-2 { grid-column: span 2 / span 2; }
   .lg\\:col-span-1 { grid-column: span 1 / span 1; }
   .lg\\:max-w-md { max-width: 28rem; }
+}
+
+/* Typing Indicator Animation */
+.typing-dot {
+  animation: typing-bounce 1.4s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing-bounce {
+  0%, 80%, 100% {
+    transform: translateY(0);
+    opacity: 0.3;
+  }
+  40% {
+    transform: translateY(-10px);
+    opacity: 1;
+  }
 }
 
 /* Spacing */
@@ -77,6 +104,7 @@ body {
 
 /* Sizing */
 .h-1 { height: 0.25rem; }
+.h-2 { height: 0.5rem; }
 .h-3 { height: 0.75rem; }
 .h-4 { height: 1rem; }
 .h-6 { height: 1.5rem; }
@@ -86,6 +114,7 @@ body {
 .h-80 { height: 20rem; }
 .h-96 { height: 24rem; }
 .h-full { height: 100%; }
+.w-2 { width: 0.5rem; }
 .w-8 { width: 2rem; }
 .w-12 { width: 3rem; }
 .w-16 { width: 4rem; }
@@ -210,6 +239,9 @@ body {
   50% { opacity: .5; }
 }
 
+/* Text utilities */
+.whitespace-pre-line { white-space: pre-line; }
+
 /* Disabled states */
 .disabled\\:bg-gray-300:disabled { background-color: #d1d5db; }
 
@@ -227,4 +259,29 @@ body {
   .lg\\:col-span-2 { grid-column: span 2 / span 2; }
   .lg\\:col-span-1 { grid-column: span 1 / span 1; }
   .lg\\:max-w-md { max-width: 28rem; }
+}
+
+/* Typing Indicator Animation */
+.typing-dot {
+  animation: typing-bounce 1.4s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing-bounce {
+  0%, 80%, 100% {
+    transform: translateY(0);
+    opacity: 0.3;
+  }
+  40% {
+    transform: translateY(-10px);
+    opacity: 1;
+  }
 }

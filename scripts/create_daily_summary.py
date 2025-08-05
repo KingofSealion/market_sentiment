@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import json
+from datetime import date, timedelta
 from dotenv import load_dotenv
 import httpx
 from langchain_openai import ChatOpenAI
@@ -23,7 +24,12 @@ if missing_vars:
 custom_http_client = httpx.Client(verify=False)
 llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0, http_client=custom_http_client, api_key=os.getenv("OPENAI_API_KEY"))
 
-db_conn_info = {"host": os.getenv("DB_HOST"), "database": os.getenv("DB_NAME"), "user": os.getenv("DB_USER"), "password": os.getenv("DB_PASSWORD")}
+db_conn_info = {
+    "host": os.getenv("DB_HOST"),
+    "database": os.getenv("DB_NAME"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD")
+}
 
 try:
     db_pool = psycopg2.pool.SimpleConnectionPool(1, 5, **db_conn_info)
@@ -39,14 +45,32 @@ def generate_summary_for_day(cur, conn, target_date, target_commodity_id, target
     logging.info(f"--- {target_commodity_name} ({target_date}) 일일 요약 생성 시작 ---")
     
     # 1. 해당 날짜, 품목의 모든 개별 분석 결과 가져오기
-    # raw_news와 JOIN하여 '발행일(published_time)' 기준으로 뉴스를 조회
-    fetch_query = """
-    SELECT nar.sentiment_score, nar.reasoning, nar.keywords
-    FROM news_analysis_results AS nar
-    JOIN raw_news AS r ON nar.raw_news_id = r.id
-    WHERE nar.commodity_id = %s AND r.published_time::date = %s;
-    """
-    cur.execute(fetch_query, (target_commodity_id, target_date))
+    # 월요일(weekday == 0)인 경우 토, 일, 월 3일치 데이터를 조회하도록 수정
+    is_monday = target_date.weekday() == 0
+    
+    if is_monday:
+        # 월요일일 경우, 이전 토요일부터 월요일까지의 데이터를 조회
+        start_date = target_date - timedelta(days=2)
+        end_date = target_date
+        logging.info(f"월요일이므로 {start_date}부터 {end_date}까지 3일치 뉴스를 집계합니다.")
+        fetch_query = """
+        SELECT nar.sentiment_score, nar.reasoning, nar.keywords
+        FROM news_analysis_results AS nar
+        JOIN raw_news AS r ON nar.raw_news_id = r.id
+        WHERE nar.commodity_id = %s AND r.published_time::date BETWEEN %s AND %s;
+        """
+        params = (target_commodity_id, start_date, end_date)
+    else:
+        # 월요일이 아닐 경우, 해당 날짜의 데이터만 조회
+        fetch_query = """
+        SELECT nar.sentiment_score, nar.reasoning, nar.keywords
+        FROM news_analysis_results AS nar
+        JOIN raw_news AS r ON nar.raw_news_id = r.id
+        WHERE nar.commodity_id = %s AND r.published_time::date = %s;
+        """
+        params = (target_commodity_id, target_date)
+
+    cur.execute(fetch_query, params)
     results = cur.fetchall()
 
     if not results:
@@ -128,14 +152,17 @@ def main():
         conn = db_pool.getconn()
         cur = conn.cursor()
 
-        # raw_news와 JOIN하여 실제 '발행일' 기준으로 요약이 없는 작업을 서칭.
+        # 요약할 작업을 찾을 때 토요일(6)과 일요일(7)을 제외하도록 수정
+        # PostgreSQL의 EXTRACT(ISODOW FROM date)는 월요일=1, ..., 일요일=7을 반환합니다.
         find_jobs_query = """
         SELECT DISTINCT r.published_time::date AS date, nar.commodity_id, c.name AS commodity_name
         FROM news_analysis_results nar
         JOIN raw_news r ON nar.raw_news_id = r.id
         JOIN commodities c ON nar.commodity_id = c.id
         LEFT JOIN daily_market_summary dms ON r.published_time::date = dms.date AND nar.commodity_id = dms.commodity_id
-        WHERE r.analysis_status = TRUE AND dms.id IS NULL;
+        WHERE r.analysis_status = TRUE 
+          AND dms.id IS NULL
+          AND EXTRACT(ISODOW FROM r.published_time::date) NOT IN (6, 7);
         """
         cur.execute(find_jobs_query)
         jobs_to_do = cur.fetchall()

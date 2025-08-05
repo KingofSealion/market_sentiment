@@ -42,6 +42,7 @@ import {
   Legend,
 } from 'recharts';
 import axios, { AxiosError } from 'axios';
+import { TypingIndicator } from './components/TypingIndicator';
 
 // API Base URL
 const API_BASE_URL = 'http://localhost:8001';
@@ -1319,7 +1320,7 @@ export default function AgriCommoditiesDashboard() {
   const renderChatbot = () => (
     <div className="max-w-4xl mx-auto">
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-semibold text-gray-800">AI 농업 시장 분석가</h2>
+        <h2 className="text-2xl font-semibold text-gray-800">AI 원자재 시장 분석가</h2>
         <Button
           onClick={handleNewConversation}
           variant="outlined"
@@ -1349,7 +1350,7 @@ export default function AgriCommoditiesDashboard() {
                       : 'bg-gray-100 text-gray-800'
                   }`}
                 >
-                  <p className="text-sm">{message.message}</p>
+                  <p className="text-sm whitespace-pre-line">{message.message}</p>
                   <p className={`text-xs mt-1 ${message.isUser ? 'text-blue-100' : 'text-gray-500'}`}>
                     {message.timestamp.toLocaleTimeString()}
                   </p>
@@ -1359,10 +1360,7 @@ export default function AgriCommoditiesDashboard() {
             {isChatLoading && (
               <div className="flex justify-start">
                 <div className="bg-gray-100 text-gray-800 px-4 py-2 rounded-lg">
-                  <p className="text-sm">AI가 입력 중...</p>
-                  <div className="w-full bg-gray-200 rounded-full h-1 mt-2">
-                    <div className="bg-blue-500 h-1 rounded-full animate-pulse w-1/2"></div>
-                  </div>
+                  <TypingIndicator />
                 </div>
               </div>
             )}
