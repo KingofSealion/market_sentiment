@@ -1,6 +1,11 @@
 from flask import Flask, jsonify
 import subprocess
 import sys
+from pathlib import Path # pathlib 라이브러리를 임포트합니다.
+
+# 현재 app.py 파일이 위치한 디렉토리의 절대 경로를 가져옵니다.
+# 이렇게 하면 어디서 실행하든 항상 정확한 경로를 참조할 수 있습니다.
+BASE_DIR = Path(__file__).resolve().parent
 
 app = Flask(__name__)
 
@@ -8,17 +13,21 @@ app = Flask(__name__)
 def run_all():
     """과거 데이터 대용량 처리용: analyze_news.py + create_daily_summary.py 순차 실행"""
     try:
-        # 1. analyze_news.py 실행
+        # 스크립트들의 정확한 전체 경로를 지정합니다.
+        analyze_script_path = BASE_DIR / 'analyze_news.py'
+        summary_script_path = BASE_DIR / 'create_daily_summary.py'
+
+        # 1. analyze_news.py 실행 (정확한 경로 사용)
         analyze_proc = subprocess.run(
-            [sys.executable, 'analyze_news.py'],
+            [sys.executable, str(analyze_script_path)],
             capture_output=True, text=True
         )
         analyze_out = analyze_proc.stdout
         analyze_err = analyze_proc.stderr
 
-        # 2. create_daily_summary.py 실행
+        # 2. create_daily_summary.py 실행 (정확한 경로 사용)
         summary_proc = subprocess.run(
-            [sys.executable, 'create_daily_summary.py'],
+            [sys.executable, str(summary_script_path)],
             capture_output=True, text=True
         )
         summary_out = summary_proc.stdout
@@ -44,8 +53,11 @@ def run_all():
 def analyze_news_only():
     """실시간 운영용: 뉴스 분석만 실행 (30분마다)"""
     try:
+        # analyze_news.py 스크립트의 정확한 전체 경로를 지정합니다.
+        script_path = BASE_DIR / 'analyze_news.py'
+
         proc = subprocess.run(
-            [sys.executable, 'analyze_news.py'],
+            [sys.executable, str(script_path)], # 경로를 문자열로 변환하여 전달
             capture_output=True, text=True
         )
         
@@ -62,8 +74,11 @@ def analyze_news_only():
 def daily_summary_only():
     """실시간 운영용: 일일 요약 생성만 실행 (매일 새벽)"""
     try:
+        # create_daily_summary.py 스크립트의 정확한 전체 경로를 지정합니다.
+        script_path = BASE_DIR / 'create_daily_summary.py'
+
         proc = subprocess.run(
-            [sys.executable, 'create_daily_summary.py'],
+            [sys.executable, str(script_path)], # 경로를 문자열로 변환하여 전달
             capture_output=True, text=True
         )
         
@@ -90,4 +105,4 @@ def health_check():
     })
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True) 
+    app.run(host='0.0.0.0', port=5001, debug=True)

@@ -84,6 +84,7 @@ interface ChatMessage {
   timestamp: Date;
 }
 
+
 // Utility Functions
 const getSentimentLevel = (score: number): string => {
   if (score >= 60) return 'Positive';
@@ -145,6 +146,32 @@ const formatDate = (dateString: string): string => {
   });
 };
 
+const formatMarkdownText = (text: string): string => {
+  if (!text) return '';
+  
+  return text
+    // 줄바꿈 처리
+    .replace(/\n/g, '<br/>')
+    // **볼드** 처리
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    // *이탤릭* 처리
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    // `인라인 코드` 처리
+    .replace(/`(.*?)`/g, '<code style="background-color: #f1f5f9; padding: 2px 4px; border-radius: 3px; font-family: monospace; font-size: 0.9em;">$1</code>')
+    // ### 제목 처리
+    .replace(/^### (.*$)/gm, '<h3 style="font-size: 1.1em; font-weight: bold; margin: 12px 0 8px 0; color: #374151;">$1</h3>')
+    // ## 제목 처리
+    .replace(/^## (.*$)/gm, '<h2 style="font-size: 1.2em; font-weight: bold; margin: 16px 0 10px 0; color: #374151;">$1</h2>')
+    // # 제목 처리
+    .replace(/^# (.*$)/gm, '<h1 style="font-size: 1.3em; font-weight: bold; margin: 18px 0 12px 0; color: #374151;">$1</h1>')
+    // --- 구분선 처리
+    .replace(/^---$/gm, '<hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;" />')
+    // - 리스트 처리 (간단한 버전)
+    .replace(/^- (.*$)/gm, '<div style="margin: 4px 0; padding-left: 16px;">• $1</div>')
+    // 숫자 리스트 처리
+    .replace(/^\d+\. (.*$)/gm, '<div style="margin: 4px 0; padding-left: 16px;">$&</div>');
+};
+
 
 // Main Component
 export default function AgriCommoditiesDashboard() {
@@ -160,6 +187,7 @@ export default function AgriCommoditiesDashboard() {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   
+  // console.log("1232323213", JSON.stringify(chatMessages, null, 2));
   // Loading States
   const [isLoadingCards, setIsLoadingCards] = useState(true);
   const [isLoadingChart, setIsLoadingChart] = useState(false);
@@ -1350,7 +1378,20 @@ export default function AgriCommoditiesDashboard() {
                       : 'bg-gray-100 text-gray-800'
                   }`}
                 >
-                  <p className="text-sm whitespace-pre-line">{message.message}</p>
+                 
+                  <div 
+                    className="text-sm whitespace-pre-wrap break-words leading-relaxed" 
+                    // style={{ 
+                    //   whiteSpace: 'pre-wrap',
+                    //   wordBreak: 'break-word',
+                    //   overflowWrap: 'break-word',
+                    //   lineHeight: '1.6',
+                    //   fontFamily: 'inherit'
+                    // }}
+                    dangerouslySetInnerHTML={{
+                      __html: formatMarkdownText(message.message)
+                    }}
+                  />
                   <p className={`text-xs mt-1 ${message.isUser ? 'text-blue-100' : 'text-gray-500'}`}>
                     {message.timestamp.toLocaleTimeString()}
                   </p>

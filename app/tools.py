@@ -160,33 +160,13 @@ def sql_query_tool(query: str) -> str:
             summary_query += " AND dms.date = %s"
             params.append(parsed["dates"][0])
         elif parsed.get("date_range") == "recent":
-            # 먼저 최신 날짜를 조회
+            # 최신 날짜를 조회
             cursor.execute("SELECT MAX(date) FROM daily_market_summary")
             latest_date = cursor.fetchone()[0]
             
-            # 우선순위별 쿼리 의도 분석
-            q_lower = query.lower()
-            
-            # 1. 명시적 기간 키워드 (최우선)
-            period_keywords = ["일주일", "한주일", "7일", "일주", "한달", "30일", "며칠", "몇일"]
-            has_period = any(keyword in q_lower for keyword in period_keywords)
-            
-            # 2. 변화/비교/트렌드 키워드
-            trend_keywords = ["변화", "추이", "트렌드", "비교", "동향", "흐름", "패턴", "움직임"]
-            has_trend = any(keyword in q_lower for keyword in trend_keywords)
-            
-            # 3. 단일 시점 키워드
-            single_keywords = ["현재", "지금", "오늘", "얼마", "몇점"]
-            has_single = any(keyword in q_lower for keyword in single_keywords)
-            
-            if has_period or (has_trend and not has_single):
-                # 기간 데이터 또는 트렌드 요청 - 최신일부터 7일간
-                summary_query += " AND dms.date >= %s - INTERVAL '6 days' AND dms.date <= %s"
-                params.extend([latest_date, latest_date])
-            else:
-                # 단일 최신 데이터 요청
-                summary_query += " AND dms.date = %s"
-                params.append(latest_date)
+            # 기본적으로 최근 7일간 데이터 조회 (Agent가 판단해서 사용)
+            summary_query += " AND dms.date >= %s - INTERVAL '6 days' AND dms.date <= %s"
+            params.extend([latest_date, latest_date])
         
         if parsed["commodity_name"]:
             summary_query += " AND c.name = %s"
