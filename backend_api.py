@@ -212,29 +212,27 @@ async def get_time_series_data(commodity_name: str):
             )
         
         if df_price.empty:
-            conn.close()
-            raise HTTPException(
-                status_code=404, 
-                detail=f"No price data found for {commodity_name} in the specified date range"
-            )
+            print(f"[WARNING] No price data found for {commodity_name}, but continuing with sentiment data only")
+            # Create empty dataframe with same structure for consistent merging
+            df_price = pd.DataFrame(columns=['date', 'price'])
         
-        # Merge sentiment and price data - ONLY include dates where BOTH sentiment AND price data exist
+        # Merge sentiment and price data - INCLUDE ALL sentiment data, price can be null
         time_series = []
         
         for _, row in df_sentiment.iterrows():
             date = row['date']
             sentiment_score = float(row['daily_sentiment_score']) if row['daily_sentiment_score'] else None
             
-            # Get actual price for this date - ONLY real data, NO mock data
+            # Get actual price for this date - allow null prices
             price_row = df_price[df_price['date'] == date]
-            if not price_row.empty:
-                price = float(price_row.iloc[0]['price'])
-                time_series.append(TimeSeriesData(
-                    date=date,
-                    sentiment_score=sentiment_score,
-                    price=price
-                ))
-            # If no price data for this date, skip this entry entirely
+            price = float(price_row.iloc[0]['price']) if not price_row.empty else None
+            
+            # Always include sentiment data, even if price is missing
+            time_series.append(TimeSeriesData(
+                date=date,
+                sentiment_score=sentiment_score,
+                price=price
+            ))
         
         conn.close()
         return time_series
