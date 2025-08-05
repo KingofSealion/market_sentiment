@@ -151,7 +151,33 @@ def sql_query_tool(query: str) -> str:
             summary_query += " AND dms.date = %s"
             params.append(parsed["dates"][0])
         elif parsed.get("date_range") == "recent":
-            summary_query += " AND dms.date >= CURRENT_DATE - INTERVAL '7 days'"
+            # 먼저 최신 날짜를 조회
+            cursor.execute("SELECT MAX(date) FROM daily_market_summary")
+            latest_date = cursor.fetchone()[0]
+            
+            # 우선순위별 쿼리 의도 분석
+            q_lower = query.lower()
+            
+            # 1. 명시적 기간 키워드 (최우선)
+            period_keywords = ["일주일", "한주일", "7일", "일주", "한달", "30일", "며칠", "몇일"]
+            has_period = any(keyword in q_lower for keyword in period_keywords)
+            
+            # 2. 변화/비교/트렌드 키워드
+            trend_keywords = ["변화", "추이", "트렌드", "비교", "동향", "흐름", "패턴", "움직임"]
+            has_trend = any(keyword in q_lower for keyword in trend_keywords)
+            
+            # 3. 단일 시점 키워드
+            single_keywords = ["현재", "지금", "오늘", "얼마", "몇점"]
+            has_single = any(keyword in q_lower for keyword in single_keywords)
+            
+            if has_period or (has_trend and not has_single):
+                # 기간 데이터 또는 트렌드 요청 - 최신일부터 7일간
+                summary_query += " AND dms.date >= %s - INTERVAL '6 days' AND dms.date <= %s"
+                params.extend([latest_date, latest_date])
+            else:
+                # 단일 최신 데이터 요청
+                summary_query += " AND dms.date = %s"
+                params.append(latest_date)
         
         if parsed["commodity_name"]:
             summary_query += " AND c.name = %s"
@@ -163,7 +189,15 @@ def sql_query_tool(query: str) -> str:
         summary_results = cursor.fetchall()
         
         if summary_results:
-            results.append("=== 일일 시장 요약 ===")
+            # 요약 데이터의 기간 정보 명시
+            if len(summary_results) > 1:
+                first_date = summary_results[-1][0]  # 가장 오래된 날짜
+                last_date = summary_results[0][0]    # 가장 최신 날짜
+                results.append(f"=== 일일 시장 요약 (분석기간: {first_date} ~ {last_date}) ===")
+            else:
+                summary_date = summary_results[0][0]
+                results.append(f"=== 일일 시장 요약 (분석일자: {summary_date}) ===")
+            
             for row in summary_results:
                 date, commodity, score, reasoning, keywords, news_count = row
                 results.append(f"날짜: {date}")
@@ -174,11 +208,12 @@ def sql_query_tool(query: str) -> str:
                 results.append(f"분석된 뉴스 수: {news_count}")
                 results.append("---")
         
-        # 2. 개별 뉴스 분석 데이터 검색
+        # 2. 개별 뉴스 분석 데이터 검색 (영향도 기준 개선)
         if parsed["commodity_name"]:
             news_query = """
             SELECT r.title, r.published_time, nar.sentiment_score, 
-                   nar.reasoning, nar.keywords, c.name as commodity_name
+                   nar.reasoning, nar.keywords, c.name as commodity_name,
+                   ABS(nar.sentiment_score - 50) as impact_score
             FROM raw_news r
             JOIN news_analysis_results nar ON r.id = nar.raw_news_id
             JOIN commodities c ON nar.commodity_id = c.id
@@ -186,25 +221,49 @@ def sql_query_tool(query: str) -> str:
             """
             params = [parsed["commodity_name"]]
             
+            # 뉴스 조회도 동일한 로직 적용
             if parsed["dates"]:
                 news_query += " AND DATE(r.published_time) = %s"
                 params.append(parsed["dates"][0])
             elif parsed.get("date_range") == "recent":
-                news_query += " AND r.published_time >= CURRENT_DATE - INTERVAL '7 days'"
+                # 특정 품목의 최신 뉴스 날짜 기준으로 7일간 조회
+                cursor.execute("""
+                    SELECT MAX(DATE(r.published_time)) 
+                    FROM raw_news r 
+                    JOIN news_analysis_results nar ON r.id = nar.raw_news_id
+                    JOIN commodities c ON nar.commodity_id = c.id
+                    WHERE c.name = %s AND r.analysis_status = TRUE
+                """, [parsed["commodity_name"]])
+                latest_news_date = cursor.fetchone()[0]
+                if latest_news_date:
+                    news_query += " AND DATE(r.published_time) >= %s - INTERVAL '6 days' AND DATE(r.published_time) <= %s"
+                    params.extend([latest_news_date, latest_news_date])
+                else:
+                    # 해당 품목의 뉴스가 없으면 전체에서 최근 7일
+                    news_query += " AND r.published_time >= CURRENT_DATE - INTERVAL '7 days'"
             
-            news_query += " ORDER BY r.published_time DESC LIMIT 5"
+            # 영향도 높은 뉴스 우선 (감정점수가 50에서 멀수록 영향도 높음) + 최신순
+            news_query += " ORDER BY impact_score DESC, r.published_time DESC LIMIT 10"
             
             cursor.execute(news_query, tuple(params))
             news_results = cursor.fetchall()
             
             if news_results:
-                results.append("\n=== 관련 뉴스 분석 ===")
+                # 기간 정보 계산 및 명시
+                if len(news_results) > 1:
+                    first_date = news_results[-1][1].date()  # 가장 오래된 뉴스 날짜
+                    last_date = news_results[0][1].date()    # 가장 최신 뉴스 날짜
+                    results.append(f"\n=== 관련 뉴스 분석 (분석기간: {first_date} ~ {last_date}) ===")
+                else:
+                    news_date = news_results[0][1].date()
+                    results.append(f"\n=== 관련 뉴스 분석 (분석일자: {news_date}) ===")
+                
                 for row in news_results:
-                    title, pub_time, score, reasoning, keywords, commodity = row
+                    title, pub_time, score, reasoning, keywords, commodity, impact = row
                     results.append(f"제목: {title}")
                     results.append(f"발행시간: {pub_time}")
                     results.append(f"품목: {commodity}")
-                    results.append(f"감정점수: {score}")
+                    results.append(f"감정점수: {score} (영향도: {impact:.1f})")
                     results.append(f"분석 근거: {reasoning}")
                     results.append(f"키워드: {keywords}")
                     results.append("---")
@@ -334,12 +393,12 @@ class CommodityCalculator:
     def bushel_to_ton(self, value: float, commodity_id: int) -> float | None:
         if commodity_id not in self.conv_factors:
             return None
-        return round(value * self.conv_factors[commodity_id], 4)
+        return round(value * self.conv_factors[commodity_id], 2)
 
     def ton_to_bushel(self, value: float, commodity_id: int) -> float | None:
         if commodity_id not in self.conv_factors:
             return None
-        return round(value / self.conv_factors[commodity_id], 4)
+        return round(value / self.conv_factors[commodity_id], 2)
 
     # [수정] USc/bu → USD/MT 변환 오류 수정 (불필요한 * 1000 제거)
     def uscbushel_to_usdmt(self, price_uscbu: float, commodity_id: int) -> float | None:

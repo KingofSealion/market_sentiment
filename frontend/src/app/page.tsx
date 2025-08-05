@@ -1318,7 +1318,7 @@ export default function AgriCommoditiesDashboard() {
   };
 
   const renderChatbot = () => (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-9xl mx-auto">
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-semibold text-gray-800">AI 원자재 시장 분석가</h2>
         <Button
@@ -1334,7 +1334,7 @@ export default function AgriCommoditiesDashboard() {
       <div className="bg-white rounded-lg shadow-md p-4 h-96 mb-4 overflow-y-auto">
         {chatMessages.length === 0 ? (
           <div className="flex items-center justify-center h-full text-gray-500">
-            농업 상품 시장 감정에 대해 무엇이든 물어보세요...
+            원자재 시장에 대해 무엇이든 물어보세요! 
           </div>
         ) : (
           <div className="space-y-4">
@@ -1344,7 +1344,7 @@ export default function AgriCommoditiesDashboard() {
                 className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
               >
                 <div
-                  className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
+                  className={`max-w-4xl lg:max-w-7xl px-4 py-2 rounded-lg ${
                     message.isUser
                       ? 'bg-blue-500 text-white'
                       : 'bg-gray-100 text-gray-800'
@@ -1373,7 +1373,7 @@ export default function AgriCommoditiesDashboard() {
         <TextField
           fullWidth
           variant="outlined"
-          placeholder="시장 감정, 트렌드, 특정 상품에 대해 질문하세요..."
+          placeholder="원자재 시장에 대해 질문하세요..."
           value={chatInput}
           onChange={(e) => setChatInput(e.target.value)}
           onKeyPress={(e) => e.key === 'Enter' && sendChatMessage()}
