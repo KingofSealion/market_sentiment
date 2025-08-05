@@ -188,6 +188,8 @@ export default function AgriCommoditiesDashboard() {
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   
   // console.log("1232323213", JSON.stringify(chatMessages, null, 2));
+  // console.log("123213123", chatMessages) 
+  
   // Loading States
   const [isLoadingCards, setIsLoadingCards] = useState(true);
   const [isLoadingChart, setIsLoadingChart] = useState(false);
@@ -1214,9 +1216,9 @@ export default function AgriCommoditiesDashboard() {
               scrollbarWidth: 'thin',
               scrollbarColor: '#bbb #f5f5f5',
             }}>
-              {newsArticles.map((article) => (
+              {newsArticles.map((article, index) => (
                 <Card
-                  key={article.id}
+                  key={`${article.id}-${index}`}
                   variant="outlined"
                   sx={{
                     cursor: 'pointer',

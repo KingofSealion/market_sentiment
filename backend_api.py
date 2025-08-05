@@ -387,50 +387,38 @@ async def get_trending_keywords():
 async def chat_stream(request: ChatRequest):
     """Stream chat responses using Server-Sent Events"""
     print(f"[INFO] Chat request received: {request.message[:100]}...")
-    
+
     if not agent_executor:
         print("[ERROR] Agent executor not initialized")
-        raise HTTPException(status_code=503, detail="AI agent not initialized. Please check server logs for initialization errors.")
-    
-    print("[INFO] Agent executor found, processing request...")
-    
+        raise HTTPException(status_code=503, detail="AI agent not initialized.")
+
     async def generate_response():
         try:
-            # Stream the response
+            # Start 이벤트 전송
             yield f"data: {json.dumps({'type': 'start', 'message': ''})}\n\n"
-            
-            print(f"[INFO] Invoking agent with input: {request.message}")
-            
-            # Get response from agent
+
+            # 에이전트 호출
             result = await agent_executor.ainvoke({"input": request.message})
-            print(f"[INFO] Agent response received: {type(result)}")
-            
-            response_text = result.get('output', 'Sorry, I could not process your request.')
-            print(f"[INFO] Response text (first 200 chars): {response_text[:200]}...")
-            
-            # 응답 텍스트 그대로 사용 (포맷팅 제거)
-            formatted_text = response_text
-            
-            # Simulate streaming by sending chunks
-            words = formatted_text.split()
+            response_text = result.get('output', '죄송합니다. 요청을 처리할 수 없습니다.')
+
+            # 스트리밍: 줄 단위로 나누면서 \n 보존
             current_text = ""
-            for i, word in enumerate(words):
-                current_text += word + " "
-                yield f"data: {json.dumps({'type': 'chunk', 'message': current_text.strip()})}\n\n"
-                await asyncio.sleep(0.05)  # Small delay for typing effect
-            
-            yield f"data: {json.dumps({'type': 'end', 'message': current_text.strip()})}\n\n"
-            print("[INFO] Chat response completed successfully")
-            
+            # splitlines(True) -> 줄 끝의 '\n' 도 함께 보존합니다
+            for line in response_text.splitlines(True):
+                current_text += line
+                yield f"data: {json.dumps({'type': 'chunk', 'message': current_text})}\n\n"
+                await asyncio.sleep(0.05)
+
+            # End 이벤트 전송
+            yield f"data: {json.dumps({'type': 'end', 'message': current_text})}\n\n"
+
         except Exception as e:
             print(f"[ERROR] Chat processing error: {e}")
-            import traceback
-            print(f"[ERROR] Chat error traceback: {traceback.format_exc()}")
-            yield f"data: {json.dumps({'type': 'error', 'message': f'죄송합니다. 처리 중 오류가 발생했습니다: {str(e)}'})}\n\n"
-    
+            yield f"data: {json.dumps({'type': 'error', 'message': f'죄송합니다. 오류가 발생했습니다: {e}'})}\n\n"
+
     return StreamingResponse(
         generate_response(),
-        media_type="text/plain",
+        media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
