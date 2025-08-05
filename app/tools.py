@@ -93,15 +93,24 @@ def parse_query_details(query: str) -> Dict[str, Any]:
     if "최근" in query or "최신" in query or "가장 최근" in query:
         result["date_range"] = "recent"
     
-    # 3. 숫자와 단위 추출 (수량 변환용)
-    # 예: "150.5 부셸", "95.2 million acres", "200 톤", "150 부셸은"
-    value_match = re.search(r"([\d\.\,]+)\s*(million)?\s*(bushels? per acre|bu/acre|bushels?|부셸|bu|톤|ton|acres?|에이커|헥타르|hectare)", q_lower)
+    # 3. 숫자와 단위 추출 (수량 변환용) - 모든 규모 단위 지원
+    # 예: "150.5 부셸", "95.2 million acres", "14.9 billion bushel", "200 톤"
+    value_match = re.search(r"([\d\.\,]+)\s*(thousand|million|billion|trillion|천|만|억|조)?\s*(bushels? per acre|bu/acre|bushels?|부셸|bu|톤|ton|acres?|에이커|헥타르|hectare)", q_lower)
     if value_match:
         value_str = value_match.group(1).replace(",", "")
         val = float(value_str)
         
-        if value_match.group(2) and "million" in value_match.group(2):
-            val *= 1_000_000
+        # 규모 단위 처리
+        if value_match.group(2):
+            scale_unit = value_match.group(2).lower()
+            scale_multipliers = {
+                "thousand": 1_000, "천": 1_000,
+                "million": 1_000_000, "백만": 1_000_000,
+                "billion": 1_000_000_000, "십억": 1_000_000_000,
+                "trillion": 1_000_000_000_000, "조": 1_000_000_000_000,
+                "만": 10_000, "억": 100_000_000
+            }
+            val *= scale_multipliers.get(scale_unit, 1)
             
         result["value"] = val
         result["unit"] = value_match.group(3).strip()
@@ -189,14 +198,36 @@ def sql_query_tool(query: str) -> str:
         summary_results = cursor.fetchall()
         
         if summary_results:
-            # 요약 데이터의 기간 정보 명시
+            # 요약 데이터의 기간 정보 명시 + 데이터 상태 설명
             if len(summary_results) > 1:
                 first_date = summary_results[-1][0]  # 가장 오래된 날짜
                 last_date = summary_results[0][0]    # 가장 최신 날짜
-                results.append(f"=== 일일 시장 요약 (분석기간: {first_date} ~ {last_date}) ===")
+                
+                # 최신 데이터와 현재 날짜 간격 계산
+                from datetime import datetime, date
+                today = date.today()
+                days_behind = (today - last_date).days
+                
+                if days_behind > 3:
+                    data_status = f" ※ 최신 분석 데이터가 {days_behind}일 전이므로, 가장 최근 가용 데이터를 기준으로 분석했습니다."
+                else:
+                    data_status = ""
+                    
+                results.append(f"=== 일일 시장 요약 (분석기간: {first_date} ~ {last_date}){data_status} ===")
             else:
                 summary_date = summary_results[0][0]
-                results.append(f"=== 일일 시장 요약 (분석일자: {summary_date}) ===")
+                
+                # 단일 날짜도 현재와의 간격 확인
+                from datetime import datetime, date
+                today = date.today()
+                days_behind = (today - summary_date).days
+                
+                if days_behind > 3:
+                    data_status = f" ※ 최신 분석 데이터가 {days_behind}일 전이므로, 가장 최근 가용 데이터를 기준으로 분석했습니다."
+                else:
+                    data_status = ""
+                    
+                results.append(f"=== 일일 시장 요약 (분석일자: {summary_date}){data_status} ===")
             
             for row in summary_results:
                 date, commodity, score, reasoning, keywords, news_count = row
@@ -249,14 +280,36 @@ def sql_query_tool(query: str) -> str:
             news_results = cursor.fetchall()
             
             if news_results:
-                # 기간 정보 계산 및 명시
+                # 기간 정보 계산 및 명시 + 데이터 상태 설명
                 if len(news_results) > 1:
                     first_date = news_results[-1][1].date()  # 가장 오래된 뉴스 날짜
                     last_date = news_results[0][1].date()    # 가장 최신 뉴스 날짜
-                    results.append(f"\n=== 관련 뉴스 분석 (분석기간: {first_date} ~ {last_date}) ===")
+                    
+                    # 최신 뉴스와 현재 날짜 간격 계산
+                    from datetime import date
+                    today = date.today()
+                    days_behind = (today - last_date).days
+                    
+                    if days_behind > 3:
+                        data_status = f" ※ 최신 뉴스가 {days_behind}일 전이므로, 가장 최근 가용 뉴스를 기준으로 분석했습니다."
+                    else:
+                        data_status = ""
+                        
+                    results.append(f"\n=== 관련 뉴스 분석 (분석기간: {first_date} ~ {last_date}){data_status} ===")
                 else:
                     news_date = news_results[0][1].date()
-                    results.append(f"\n=== 관련 뉴스 분석 (분석일자: {news_date}) ===")
+                    
+                    # 단일 뉴스 날짜도 현재와의 간격 확인
+                    from datetime import date
+                    today = date.today()
+                    days_behind = (today - news_date).days
+                    
+                    if days_behind > 3:
+                        data_status = f" ※ 최신 뉴스가 {days_behind}일 전이므로, 가장 최근 가용 뉴스를 기준으로 분석했습니다."
+                    else:
+                        data_status = ""
+                        
+                    results.append(f"\n=== 관련 뉴스 분석 (분석일자: {news_date}){data_status} ===")
                 
                 for row in news_results:
                     title, pub_time, score, reasoning, keywords, commodity, impact = row
@@ -540,7 +593,68 @@ class CommodityCalculator:
             if ton_hectare:
                 return f"[{comm_name} 단수 변환] {yield_bu_acre} bu/acre = {ton_hectare} ton/hectare"
 
-        return "지원하지 않는 계산이거나, 계산에 필요한 정보(품목, 수량 등)가 부족합니다."
+        # [신규] Fallback: 기본 단위 변환 및 계산을 LLM 지식으로 처리
+        return self._fallback_calculation(query, parsed)
+    
+    def _fallback_calculation(self, query: str, parsed: Dict[str, Any]) -> str:
+        """
+        CommodityCalculator의 특수 기능으로 처리되지 않는 기본 계산을 LLM 지식으로 처리
+        """
+        q = query.lower()
+        
+        # 1. 기본 단위 변환 (옥수수 부셸↔톤)
+        if parsed.get("value") and parsed.get("unit"):
+            value = parsed["value"]
+            unit = parsed["unit"]
+            commodity = parsed.get("commodity_name", "")
+            
+            # 옥수수 부셸→톤 변환 (표준 변환계수 사용)
+            if ("옥수수" in query or "corn" in q) and unit in ["bushels", "bu", "부셸"]:
+                # 1 부셸 = 0.0254 톤 (옥수수 표준)
+                tons = round(value * 0.0254, 4)
+                return (
+                    f"**단위 변환 계산**\n\n"
+                    f"**사용된 데이터:**\n"
+                    f"- 옥수수 생산량: **{value:,.0f} bushel**\n"
+                    f"- 옥수수 부셸→톤 변환계수: **1 bushel = 0.0254 ton**\n\n"
+                    f"**계산 공식:**\n"
+                    f"톤수 = 총 부셸 × 변환계수\n\n"
+                    f"**단계별 계산 과정:**\n"
+                    f"1. 총 부셸 수: {value:,.0f} bushel\n"
+                    f"2. 톤 단위로 변환: {value:,.0f} × 0.0254 = **{tons:,.0f} ton**\n\n"
+                    f"**결과:** 옥수수 {value:,.0f} bushel = **{tons:,.0f} ton ({tons/1_000_000:.1f} million ton)**"
+                )
+            
+            # 톤→부셸 변환
+            elif ("옥수수" in query or "corn" in q) and unit in ["톤", "ton"]:
+                bushels = round(value / 0.0254, 2)
+                return (
+                    f"**단위 변환 계산**\n\n"
+                    f"**사용된 데이터:**\n"
+                    f"- 옥수수 생산량: **{value:,.2f} ton**\n"
+                    f"- 옥수수 톤→부셸 변환계수: **1 ton = 39.37 bushel**\n\n"
+                    f"**계산 공식:**\n"
+                    f"부셸수 = 총 톤 ÷ 0.0254\n\n"
+                    f"**단계별 계산 과정:**\n"
+                    f"1. 총 톤 수: {value:,.2f} ton\n"
+                    f"2. 부셸 단위로 변환: {value:,.2f} ÷ 0.0254 = **{bushels:,.2f} bushel**\n\n"
+                    f"**결과:** 옥수수 {value:,.2f} ton = **{bushels:,.2f} bushel ({bushels/1_000_000_000:.1f} billion bushel)**"
+                )
+        
+        # 2. 기본 수학 계산 요청 감지
+        calc_keywords = ["계산", "얼마", "몇", "환산", "변환", "convert"]
+        has_calc_intent = any(keyword in query for keyword in calc_keywords)
+        
+        if has_calc_intent and parsed.get("value"):
+            return (
+                f"계산에 필요한 구체적인 정보를 확인해주세요:\n"
+                f"- 감지된 수량: {parsed['value']:,.2f}\n"
+                f"- 감지된 단위: {parsed.get('unit', '단위 불명')}\n"
+                f"- 감지된 품목: {parsed.get('commodity_name', '품목 불명')}\n\n"
+                f"더 구체적인 변환 요청을 해주시면 정확한 계산을 도와드리겠습니다."
+            )
+        
+        return "계산에 필요한 정보(품목, 수량, 단위)를 명확히 지정해주세요."
 
 
 def create_agent_tools(documents: List[Document], llm: ChatOpenAI):
