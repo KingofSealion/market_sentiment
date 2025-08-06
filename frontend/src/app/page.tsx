@@ -255,13 +255,15 @@ export default function AgriCommoditiesDashboard() {
     }
   };
 
-  const fetchTrendingKeywords = async () => {
+  const fetchTrendingKeywords = async (commodity: string) => {
+    if (!commodity) return;
     try {
       setIsLoadingKeywords(true);
-      const response = await axios.get(`${API_BASE_URL}/api/dashboard/trending-keywords`);
+      const response = await axios.get(`${API_BASE_URL}/api/dashboard/trending-keywords/${encodeURIComponent(commodity)}`);
       setTrendingKeywords(response.data);
     } catch (error) {
       console.error('Error fetching trending keywords:', error);
+      setTrendingKeywords([]); // Set empty array on error
     } finally {
       setIsLoadingKeywords(false);
     }
@@ -388,13 +390,13 @@ export default function AgriCommoditiesDashboard() {
   // Effects
   useEffect(() => {
     fetchSentimentCards();
-    fetchTrendingKeywords();
   }, []);
 
   useEffect(() => {
     if (selectedCommodity) {
       fetchTimeSeriesData(selectedCommodity);
       fetchNewsArticles(selectedCommodity);
+      fetchTrendingKeywords(selectedCommodity);
     }
   }, [selectedCommodity]);
 
@@ -1315,7 +1317,7 @@ export default function AgriCommoditiesDashboard() {
       <Card>
         <CardContent>
           <Typography variant="h6" sx={{ mb: 3, fontWeight: 'bold' }}>
-            🔥 트렌딩 키워드
+            🔥 트렌딩 키워드 - {selectedCommodity || '선택된 품목 없음'}
           </Typography>
           
           {trendingKeywords.length === 0 ? (
@@ -1509,16 +1511,15 @@ export default function AgriCommoditiesDashboard() {
               </Box>
             </Box>
             
-            {/* Existing layout for news and trending keywords */}
-            <Grid container spacing={2} alignItems="stretch">
-              <Grid xs={12} lg={8}>
-                {renderNewsArticles()}
-              </Grid>
-              
-              <Grid xs={12} lg={4}>
-                {renderTrendingKeywords()}
-              </Grid>
-            </Grid>
+            {/* Trending Keywords - Full width below sentiment sections */}
+            <Box sx={{ mb: 4, width: '100%' }}>
+              {renderTrendingKeywords()}
+            </Box>
+            
+            {/* News Articles - Full width below trending keywords */}
+            <Box sx={{ width: '100%' }}>
+              {renderNewsArticles()}
+            </Box>
           </Box>
         )}
 

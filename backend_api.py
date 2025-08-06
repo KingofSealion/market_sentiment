@@ -383,6 +383,68 @@ async def get_trending_keywords():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch trending keywords: {str(e)}")
 
+@app.get("/api/dashboard/trending-keywords/{commodity}", response_model=List[TrendingKeyword])
+async def get_trending_keywords_by_commodity(commodity: str):
+    """Get trending keywords for a specific commodity from recent articles"""
+    try:
+        conn = get_db_connection()
+        
+        # First, get the most recent news date in the database
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT MAX(r.published_time) 
+            FROM raw_news r 
+            WHERE r.analysis_status = TRUE
+        """)
+        max_date_result = cursor.fetchone()
+        cursor.close()
+        
+        if not max_date_result[0]:
+            conn.close()
+            return []  # No analyzed news found
+        
+        most_recent_date = max_date_result[0]
+        # Get keywords from 7 days before the most recent news date
+        seven_days_before_recent = most_recent_date - timedelta(days=7)
+        
+        # Get keywords from recent articles for specific commodity
+        query = """
+        SELECT nar.keywords
+        FROM news_analysis_results nar
+        JOIN raw_news r ON nar.raw_news_id = r.id
+        JOIN commodities c ON nar.commodity_id = c.id
+        WHERE r.published_time >= %s 
+        AND r.analysis_status = TRUE
+        AND c.name = %s
+        """
+        
+        df = pd.read_sql(query, conn, params=[seven_days_before_recent, commodity])
+        conn.close()
+        
+        # Process keywords and count frequencies
+        keyword_counts = {}
+        for _, row in df.iterrows():
+            if row['keywords']:
+                try:
+                    keywords = json.loads(row['keywords']) if isinstance(row['keywords'], str) else row['keywords']
+                    if isinstance(keywords, list):
+                        for keyword in keywords:
+                            keyword = str(keyword).strip().lower()
+                            if keyword and len(keyword) > 2:  # Filter out very short keywords
+                                keyword_counts[keyword] = keyword_counts.get(keyword, 0) + 1
+                except:
+                    continue
+        
+        # Sort by frequency and return top 10
+        trending = [
+            TrendingKeyword(keyword=keyword, frequency=count)
+            for keyword, count in sorted(keyword_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+        ]
+        
+        return trending
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch trending keywords for {commodity}: {str(e)}")
+
 @app.post("/api/chat")
 async def chat_stream(request: ChatRequest):
     """Stream chat responses using Server-Sent Events"""
