@@ -23,6 +23,10 @@ import {
   LinearProgress,
   Avatar,
   CardActionArea,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from '@mui/material';
 import {
   Send as SendIcon,
@@ -65,6 +69,7 @@ interface TimeSeriesData {
 interface NewsArticle {
   id: number;
   title: string;
+  content: string;
   sentiment_score: number;
   reasoning: string;
   keywords: string[];
@@ -186,6 +191,10 @@ export default function AgriCommoditiesDashboard() {
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
+  
+  // News Modal State
+  const [selectedNewsArticle, setSelectedNewsArticle] = useState<NewsArticle | null>(null);
+  const [isNewsModalOpen, setIsNewsModalOpen] = useState(false);
   
   // console.log("1232323213", JSON.stringify(chatMessages, null, 2));
   // console.log("123213123", chatMessages) 
@@ -385,6 +394,37 @@ export default function AgriCommoditiesDashboard() {
 
   const handleNewConversation = () => {
     setChatMessages([]);
+  };
+
+  // News Modal Functions
+  const handleNewsArticleClick = (article: NewsArticle) => {
+    setSelectedNewsArticle(article);
+    setIsNewsModalOpen(true);
+  };
+
+  const handleNewsModalClose = () => {
+    setIsNewsModalOpen(false);
+    setSelectedNewsArticle(null);
+  };
+
+  // Text truncation function for news content
+  const truncateNewsContent = (text: string, maxLength: number = 200): string => {
+    if (!text) return '';
+    
+    // Look for (Reuters) - pattern and extract content after it
+    const reutersPattern = /\(Reuters\)\s*-\s*/i;
+    const match = text.match(reutersPattern);
+    
+    let contentToShow = text;
+    if (match) {
+      // Extract content after (Reuters) -
+      const startIndex = match.index! + match[0].length;
+      contentToShow = text.substring(startIndex);
+    }
+    
+    // Truncate to maxLength
+    if (contentToShow.length <= maxLength) return contentToShow;
+    return contentToShow.substring(0, maxLength) + '...';
   };
 
   // Effects
@@ -1231,7 +1271,7 @@ export default function AgriCommoditiesDashboard() {
                       boxShadow: 2,
                     },
                   }}
-                  onClick={() => alert(`기사 상세보기:\n\n제목: ${article.title}\n\n분석: ${article.reasoning}`)}
+                  onClick={() => handleNewsArticleClick(article)}
                 >
                   <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
@@ -1262,14 +1302,34 @@ export default function AgriCommoditiesDashboard() {
                       variant="body2" 
                       color="text.secondary" 
                       sx={{ 
+                        mb: 1,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                        fontSize: '0.85rem',
+                      }}
+                    >
+                      <strong>분석:</strong> {article.reasoning}
+                    </Typography>
+                    
+                    <Typography 
+                      variant="body2" 
+                      color="text.primary" 
+                      sx={{ 
                         mb: 2,
                         display: '-webkit-box',
                         WebkitLineClamp: 2,
                         WebkitBoxOrient: 'vertical',
                         overflow: 'hidden',
+                        fontSize: '0.8rem',
+                        fontStyle: 'italic',
+                        bgcolor: 'grey.50',
+                        p: 1,
+                        borderRadius: 1,
                       }}
                     >
-                      {article.reasoning}
+                      "{truncateNewsContent(article.content, 200)}"
                     </Typography>
                     
                     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
@@ -1524,6 +1584,99 @@ export default function AgriCommoditiesDashboard() {
         )}
 
         {currentTab === 1 && renderChatbot()}
+
+        {/* News Article Modal */}
+        <Dialog
+          open={isNewsModalOpen}
+          onClose={handleNewsModalClose}
+          maxWidth="md"
+          fullWidth
+          PaperProps={{
+            sx: {
+              maxHeight: '80vh',
+            }
+          }}
+        >
+          {selectedNewsArticle && (
+            <>
+              <DialogTitle sx={{ pb: 2 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 2 }}>
+                  <Typography variant="h6" sx={{ flex: 1, lineHeight: 1.3 }}>
+                    {selectedNewsArticle.title}
+                  </Typography>
+                  <Chip
+                    label={Math.round(selectedNewsArticle.sentiment_score)}
+                    size="small"
+                    sx={{
+                      bgcolor: getSentimentColor(selectedNewsArticle.sentiment_score),
+                      color: 'white',
+                      fontWeight: 'bold',
+                      minWidth: 40,
+                    }}
+                  />
+                </Box>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  {selectedNewsArticle.source} • {formatDate(selectedNewsArticle.published_time)}
+                </Typography>
+              </DialogTitle>
+              
+              <DialogContent sx={{ pt: 0 }}>
+                <Box sx={{ mb: 3 }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1, color: 'primary.main' }}>
+                    💭 AI 분석
+                  </Typography>
+                  <Typography 
+                    variant="body2" 
+                    sx={{ 
+                      p: 2, 
+                      bgcolor: 'grey.50', 
+                      borderRadius: 1, 
+                      border: '1px solid',
+                      borderColor: 'grey.200',
+                      mb: 2
+                    }}
+                  >
+                    {selectedNewsArticle.reasoning}
+                  </Typography>
+                  
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 3 }}>
+                    {selectedNewsArticle.keywords.map((keyword, index) => (
+                      <Chip
+                        key={index}
+                        label={keyword}
+                        size="small"
+                        variant="outlined"
+                        sx={{ fontSize: '0.75rem' }}
+                      />
+                    ))}
+                  </Box>
+                </Box>
+
+                <Box>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 2, color: 'primary.main' }}>
+                    📰 뉴스 본문
+                  </Typography>
+                  <Typography 
+                    variant="body2" 
+                    sx={{ 
+                      lineHeight: 1.6, 
+                      whiteSpace: 'pre-line',
+                      textAlign: 'justify'
+                    }}
+                  >
+                    {selectedNewsArticle.content}
+                  </Typography>
+                </Box>
+              </DialogContent>
+              
+              <DialogActions sx={{ px: 3, pb: 3 }}>
+                <Button onClick={handleNewsModalClose} variant="outlined">
+                  닫기
+                </Button>
+              </DialogActions>
+            </>
+          )}
+        </Dialog>
       </Container>
     </Box>
   );
