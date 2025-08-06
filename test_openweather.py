@@ -1,205 +1,204 @@
-"""
-WeatherForecastCropImpactTool
-─────────────────────────────
-LangChain‑ready tool that
-
-1. Parses REAL‑WORLD ag‑market user queries (KR/EN, rough region names, dates, hours, crops)
-2. Calls OpenWeather APIs (geocoding + 5‑day/3‑hour forecast)
-3. Returns a clean forecast snippet PLUS a professional agronomic & price impact commentary
-4. Gracefully handles all errors / missing data
-5. Is easily extensible (more crops, regions, rules, languages)
-
-Author : <you/your‑team>
-Created: 2025‑08‑05
-"""
+# ────────────────────────────────────────────────────────────
+# tools.py 에 한 번에 붙여넣기: Weather + Impact (ONE-FILE)
+# ────────────────────────────────────────────────────────────
 
 from __future__ import annotations
-
-import os
-import re
-import requests
+import os, re, requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
-from langchain.agents import Tool
 from dotenv import load_dotenv
+from langchain.agents import Tool
+
+# (추가) geopy for fuzzy geocoding
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderServiceError
 
 load_dotenv()
+OW_API_KEY  = os.getenv("OPENWEATHER_API_KEY", "")
+TIMEOUT_SEC = 8
 
-# ───────────────────────────────────────────────────────────────────────────────
-# 0.  CONSTANT TABLES  ──────────────────────────────────────────────────────────
-# ------------------------------------------------------------------------------
-CROP_KEYWORDS: Dict[str, List[str]] = {
-    "corn":       ["corn", "maize", "옥수수"],
-    "soybean":    ["soybean", "soy", "bean", "대두", "소이빈"],
-    "wheat":      ["wheat", "밀", "소맥"],
-    "palm_oil":   ["palm oil", "팜유", "팜오일"],
+# ─────── 1) CONSTANTS ────────────────────────────────────────────────
+CROP_ALIASES: Dict[str, List[str]] = {
+    "corn":     ["corn", "옥수수", "maize"],
+    "soybean":  ["soybean", "beans", "대두", "soya"],
+    "soymeal":  ["soybean meal","대두박"],
+    "soyoil":   ["soybean oil","대두유"],
+    "wheat":    ["wheat","밀","소맥"],
+    "palm_oil": ["palm oil","팜유","팜오일"],
 }
 
-AG_BELT_ALIASES: Dict[str, str] = {
-    # rough regional aliases ➜ canonical city / lat‑lon anchor
-    "corn belt":        "Des Moines, Iowa",
-    "soy belt":         "Cuiaba, Brazil",
-    "black sea":        "Odessa, Ukraine",
-    "남미":              "Buenos Aires, Argentina",
-    "남미 지역":          "Buenos Aires, Argentina",
-    "콘벨트":            "Des Moines, Iowa",
-    "흑해":              "Odessa, Ukraine",
+# Belts & Regions aliases → primary lat/lon
+REGION_ANCHORS: Dict[str, Tuple[str,float,float]] = {
+    "corn belt":    ("Des Moines, US", 41.59, -93.60),
+    "콘벨트":        ("Des Moines, US", 41.59, -93.60),
+    "black sea":    ("Odessa, UA",     46.48,  30.73),
+    "흑해":          ("Odessa, UA",     46.48,  30.73),
+    "brazil":       ("Rondonópolis, BR",-16.47, -54.64),
+    "브라질":        ("Rondonópolis, BR",-16.47, -54.64),
+    "argentina":    ("Rosario, AR",    -32.95, -60.66),
+    "아르헨티나":     ("Rosario, AR",    -32.95, -60.66),
+    "south america":("Rondonópolis, BR",-16.47, -54.64),
+    "남미":          ("Rondonópolis, BR",-16.47, -54.64),
+    "malaysia":     ("Kuantan, MY",      3.80, 103.33),
+    "indonesia":    ("Medan, ID",        3.59,  98.67),
 }
 
-# Agronomic impact rules – very compressed; extend as needed.
-IMPACT_RULES: Dict[str, List[Tuple[str, str]]] = {
-    "corn": [
-        (r"temp>32 & rain<1",  "고온·가뭄은 옥수수 수분스트레스 → 수확량↓, 가격↑"),
-        (r"temp<20",           "저온은 생육지연 → 생산량↓, 가격↑"),
-    ],
-    "soybean": [
-        (r"rain>20",           "폭우는 대두 수확·품질↓, 가격↑"),
-        (r"temp>32",           "고온은 대두 결실률↓, 가격↑"),
-    ],
-    "wheat": [
-        (r"temp>35",           "폭염은 밀 수분스트레스·단백질 저하 → 수량↓, 가격↑"),
-        (r"rain<1",            "가뭄은 밀 생육↓, 가격↑"),
-    ],
+IMPACT_RULES: Dict[str, List[Tuple[str,str]]] = {
+    "corn":     [("temp>32 and rain<1","고온·가뭄 → 스트레스 → 수확↓, 가격↑"),
+                 ("temp<20",           "저온 생육지연 → 수확↓, 가격↑")],
+    "soybean":  [("rain>25",           "폭우 침수 → 품질↓, 가격↑"),
+                 ("temp>33",           "고온 결실불량 → 수확↓, 가격↑")],
+    "soymeal":  [("rule:'soybean'",    "대두 원료와 연동")],
+    "soyoil":   [("rule:'soybean'",    "대두 원료와 연동")],
+    "wheat":    [("temp>35",           "폭염 스트레스 → 수확↓, 가격↑"),
+                 ("rain<1",            "가뭄 → 수확↓, 가격↑")],
+    "palm_oil": [("rain<2",            "가뭄 → 2~3개월 후 수확↓, 가격↑"),
+                 ("rain>30",           "침수·물류 차질 → 가격↑")],
 }
 
-# ───────────────────────────────────────────────────────────────────────────────
-# 1.  HELPER FUNCTIONS  ─────────────────────────────────────────────────────────
-# ------------------------------------------------------------------------------
+# geopy Nominatim
+_GEOL = Nominatim(user_agent="agri-weather-tool", timeout=TIMEOUT_SEC)
 
-def _lookup_crop(query: str) -> Optional[str]:
-    q = query.lower()
-    for k, aliases in CROP_KEYWORDS.items():
-        if any(a.lower() in q for a in aliases):
+# ─────── 2) PARSE USER INTENT ─────────────────────────────────────────
+def _find_crop(text:str)->Optional[str]:
+    tl=text.lower()
+    for k,aliases in CROP_ALIASES.items():
+        if any(a in tl for a in aliases):
             return k
     return None
 
-def _normalize_location(raw_loc: str) -> str:
-    """Convert rough alias (콘벨트, Black Sea…) → canonical location string."""
-    raw = raw_loc.lower().strip()
-    for alias, canonical in AG_BELT_ALIASES.items():
-        if alias in raw:
-            return canonical
-    return raw_loc  # fallback
+def _parse_date_hour(text:str)->Tuple[str,Optional[int]]:
+    today=datetime.now().date()
+    ymd=re.search(r'(\d{4})[.\-/년\s]*(\d{1,2})[.\-/월\s]*(\d{1,2})', text)
+    if ymd:
+        d=datetime(int(ymd[1]),int(ymd[2]),int(ymd[3])).date()
+    else:
+        md=re.search(r'(\d{1,2})[.\-/월\s]*(\d{1,2})', text)
+        if md:
+            d=datetime(today.year,int(md[1]),int(md[2])).date()
+        elif "내일" in text:
+            d=today+timedelta(days=1)
+        else:
+            d=today
+    hr=None
+    hm=re.search(r'([01]?\d|2[0-3])\s*시', text)
+    if hm: hr=int(hm[1])
+    return d.isoformat(), hr
 
-def _geocode(location: str, api_key: str) -> Optional[Dict]:
-    url = "http://api.openweathermap.org/geo/1.0/direct"
-    r = requests.get(url, params={"q": location, "limit": 1, "appid": api_key}, timeout=10)
-    if r.status_code == 200 and r.json():
-        j = r.json()[0]
-        return {"lat": j["lat"], "lon": j["lon"], "name": j.get("name", location)}
+def _parse_location(text:str)->str:
+    tl=text.lower()
+    for alias in REGION_ANCHORS:
+        if alias in tl:
+            return alias
+    m=re.search(r'([A-Za-z가-힣,\s\-]+?)(?:날씨|예보|forecast)', text)
+    return m.group(1).strip() if m else text
+
+def _wants_impact(text:str)->bool:
+    return any(w in text.lower() for w in ("영향","impact","작황","price","가격"))
+
+# ─────── 3) GEOCODING ─────────────────────────────────────────────────────
+def _geocode(loc:str)->Optional[Tuple[str,float,float]]:
+    key=loc.lower()
+    if key in REGION_ANCHORS:
+        return REGION_ANCHORS[key]
+    # 1) OpenWeather geocode
+    try:
+        r=requests.get("http://api.openweathermap.org/geo/1.0/direct",
+                       params={"q":loc,"limit":1,"appid":OW_API_KEY},
+                       timeout=TIMEOUT_SEC)
+        if r.status_code==200 and r.json():
+            j=r.json()[0]
+            return j.get("name",loc), j["lat"], j["lon"]
+    except: pass
+    # 2) geopy fallback
+    try:
+        locobj=_GEOL.geocode(loc)
+        if locobj:
+            return locobj.address, locobj.latitude, locobj.longitude
+    except GeocoderServiceError:
+        pass
     return None
 
-def _nearest_forecast_entry(entries: List[dict], target_date: str, target_hr: Optional[int]) -> Optional[dict]:
-    best, min_diff = None, 99
-    for e in entries:
-        d, t = e["dt_txt"].split(" ")
-        if d != target_date:
-            continue
-        if target_hr is None:
-            return e
-        diff = abs(int(t[:2]) - target_hr)
-        if diff < min_diff:
-            best, min_diff = e, diff
-    return best
+# ─────── 4) FORECAST & IMPACT LOGIC ────────────────────────────────────────
+def weather_forecast_and_impact(q:str)->str:
+    if not OW_API_KEY:
+        return "❗ OPENWEATHER_API_KEY가 설정되지 않았습니다."
 
-def _parse_dates(query: str) -> Tuple[str, Optional[int]]:
-    today = datetime.now()
-    # Y‑M‑D
-    m = re.search(r'(\d{4})[.\-/년\s]*(\d{1,2})[.\-/월\s]*(\d{1,2})', query)
-    if m:
-        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}", None
-    # M‑D
-    m2 = re.search(r'(\d{1,2})[.\-/월\s]*(\d{1,2})', query)
-    if m2:
-        return f"{today.year}-{int(m2.group(1)):02d}-{int(m2.group(2)):02d}", None
-    if "내일" in query:
-        return (today + timedelta(days=1)).strftime("%Y-%m-%d"), None
-    # default today
-    return today.strftime("%Y-%m-%d"), None
+    date, hr = _parse_date_hour(q)
+    crop      = _find_crop(q)
+    loc_token = _parse_location(q)
+    do_impact = _wants_impact(q) and crop is not None
 
-def _parse_hour(query: str) -> Optional[int]:
-    m = re.search(r'([01]?\d|2[0-3])시', query)
-    return int(m.group(1)) if m else None
-
-def _parse_location(query: str) -> str:
-    # capture until keyword
-    m = re.search(r'([가-힣A-Za-z,\s\-]+?)(?:날씨|기상|예보)', query)
-    raw = m.group(1).strip() if m else query
-    return _normalize_location(raw)
-
-def _impact_comment(crop: str, temp: float, rain: float) -> str:
-    if not crop:
-        return ""
-    expr_ctx = {"temp": temp, "rain": rain}
-    for cond, msg in IMPACT_RULES.get(crop, []):
-        if eval(cond, {}, expr_ctx):
-            return f"[작황·가격 영향]\n{msg}"
-    return "[작황·가격 영향]\n특이 리스크 없음 / 중립"
-
-# ───────────────────────────────────────────────────────────────────────────────
-# 2.  CORE FETCH & FORMAT  ──────────────────────────────────────────────────────
-# ------------------------------------------------------------------------------
-
-def fetch_weather_and_impact(user_query: str) -> str:
-    """Main entry: natural‑language query ➜ formatted forecast + impact."""
-    api_key = os.environ.get("OPENWEATHER_API_KEY")
-    if not api_key:
-        return "❗ OPENWEATHER_API_KEY 환경변수가 설정되지 않았습니다."
-
-    date, hour = _parse_dates(user_query)
-    hour = _parse_hour(user_query) or hour
-    crop = _lookup_crop(user_query)
-    location = _parse_location(user_query)
-
-    geo = _geocode(location, api_key)
+    geo=_geocode(loc_token)
     if not geo:
-        return f"❗ 위치 '{location}'(을)를 인식하지 못했습니다."
+        return f"❗ 위치 '{loc_token}' 인식에 실패했습니다."
+    name, lat, lon = geo
 
-    url = "https://api.openweathermap.org/data/2.5/forecast"
-    r = requests.get(url, params={
-        "lat": geo["lat"], "lon": geo["lon"], "appid": api_key, "units": "metric"
-    }, timeout=10)
-    if r.status_code != 200 or "list" not in r.json():
-        return "❗ OpenWeather Forecast API 호출 실패"
+    # fetch forecast
+    try:
+        r=requests.get("https://api.openweathermap.org/data/2.5/forecast",
+                       params={"lat":lat,"lon":lon,"appid":OW_API_KEY,"units":"metric"},
+                       timeout=TIMEOUT_SEC)
+        r.raise_for_status()
+        fc_list=r.json().get("list",[])
+    except Exception as e:
+        return f"❗ 기상 API 오류: {e}"
 
-    entry = _nearest_forecast_entry(r.json()["list"], date, hour)
+    # pick entry
+    entry=None
+    if fc_list:
+        # find exact date/hour
+        best,dmin=None,99
+        for e in fc_list:
+            d,t=e["dt_txt"].split(" ")
+            if d!=date: continue
+            if hr is None:
+                entry=e; break
+            gap=abs(int(t[:2])-hr)
+            if gap<dmin: best, dmin = e, gap
+        entry = entry or best
+
     if not entry:
-        return f"❗ {date} {location} 예보 데이터를 찾을 수 없습니다."
+        return f"❗ {date} {name} 예보 데이터가 없습니다."
 
-    desc = entry["weather"][0]["description"]
-    temp = entry["main"]["temp"]
-    rain = entry.get("rain", {}).get("3h", 0.0)
-    hum  = entry["main"]["humidity"]
-    wind = entry["wind"]["speed"]
+    # parse weather
+    desc=entry["weather"][0]["description"]
+    temp=entry["main"]["temp"]
+    hum =entry["main"]["humidity"]
+    wind=entry["wind"]["speed"]
+    rain=entry.get("rain",{}).get("3h",0.0)
+    tlabel=f"{hr:02d}:00" if hr is not None else entry["dt_txt"].split()[1][:5]
 
-    impact_txt = _impact_comment(crop, temp, rain)
+    # build response
+    lines=[
+        f"📍 {name} | {date} {tlabel}",
+        f" └ 날씨 : {desc}",
+        f" └ 기온 : {temp:.1f}℃ | 습도 {hum}% | 풍속 {wind:.1f} m/s",
+        f" └ 강수 : {rain} mm (3h)",
+    ]
+    if do_impact:
+        # impact calc
+        ctx={"temp":temp,"rain":rain}
+        msg="특이 리스크 없음 / 중립"
+        for cond,im in IMPACT_RULES.get(crop,[]):
+            if cond.startswith("rule:'"):
+                base=cond.split("'")[1]
+                # reuse soybean logic
+                for cnd,im2 in IMPACT_RULES.get(base,[]):
+                    if eval(cnd,{},ctx): msg=im2
+            else:
+                if eval(cond,{},ctx): msg=im
+        lines.append(f" └ 품목 : {crop}")
+        lines.append(f" └ 영향 : {msg}")
+    return "\n".join(lines)
 
-    return (
-        f"📍 {geo['name']} ‑ {date} {'%02d:00'%hour if hour is not None else ''}\n"
-        f"└ 날씨 : {desc}\n"
-        f"└ 기온 : {temp:.1f}℃ | 습도 {hum}% | 풍속 {wind:.1f} m/s\n"
-        f"└ 강수 (3h) : {rain} mm\n\n"
-        f"{impact_txt}"
-    )
-
-# ───────────────────────────────────────────────────────────────────────────────
-# 3.  LangChain Tool 객체  ──────────────────────────────────────────────────────
-# ------------------------------------------------------------------------------
-
+# ─────── 5) TOOL OBJECT ──────────────────────────────────────────────────
 weather_forecast_tool = Tool(
     name="Weather Forecast & Crop Impact",
-    func=fetch_weather_and_impact,
+    func=weather_forecast_and_impact,
     description=(
-        "🔮 미래 날씨 예보 + 작황/가격 영향 분석을 제공합니다.\n"
-        "예시:\n"
-        "  • '8월 10일 미국 아이오와 옥수수 날씨와 가격 영향'\n"
-        "  • '7/15 Kansas wheat forecast'\n"
-        "  • '콘벨트 내일 날씨와 대두 영향'\n"
-        "지역·날짜가 없으면 자동으로 오늘·현재 위치를 추정합니다."
-    ),
+        "미래 날씨 예보 + (선택적) 작황·가격 영향 분석\n"
+        "→ '8월 15일 콘벨트 옥수수 날씨', '내일 흑해 밀 날씨 영향'? 등"
+    )
 )
-
-# Optional: quick self‑test
-if __name__ == "__main__":
-    print(fetch_weather_and_impact("8월 15일 콘벨트 옥수수 날씨와 가격 영향"))

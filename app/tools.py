@@ -10,6 +10,7 @@ from langchain_community.vectorstores import Chroma
 from langchain.chains import RetrievalQA
 from langchain.agents import Tool
 from langchain_openai import ChatOpenAI
+from langchain_core.prompts import PromptTemplate
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -302,8 +303,22 @@ def sql_query_tool(query: str) -> str:
                     results.append("---")
         
         # 3. 가격 데이터 검색 
-        # 크러시 마진 쿼리이거나 대두 관련 복수 품목 쿼리인 경우 대두, 대두유, 대두박 모든 가격 조회
-        if ("크러시" in query and "마진" in query) or ("대두" in query and ("대두박" in query or "대두유" in query)):
+        # 크러시 마진 또는 대두 복합 품목 관련 질문인지 확인하여, 필요한 가격 정보를 선제적으로 조회합니다.
+        q = query.lower()
+
+        # 크러시 마진 관련 키워드 확인
+        crush_keywords = ["크러시", "크러쉬", "크러싱", "착유", "crush", "보드", "board"]
+        margin_keywords = ["마진", "margin"]
+        has_crush_keyword = any(keyword in q for keyword in crush_keywords)
+        has_margin_keyword = any(keyword in q for keyword in margin_keywords)
+        is_board_crush_query = "board crush" in q
+        is_crush_query = (has_crush_keyword and has_margin_keyword) or is_board_crush_query
+
+        # 대두 관련 복수 품목 키워드 확인
+        is_soy_complex_query = ("대두" in q and ("대두박" in q or "대두유" in q)) or \
+                            ("soybean" in q and ("meal" in q or "oil" in q))
+
+        if is_crush_query or is_soy_complex_query:
             crush_commodities = ["Soybean", "Soybean Oil", "Soybean Meal"]
             crush_prices = []
             
@@ -371,8 +386,10 @@ def sql_query_tool(query: str) -> str:
     except Exception as e:
         return f"데이터베이스 검색 중 오류가 발생했습니다: {str(e)}"
 
-class CommodityCalculator:
-    def __init__(self):
+class CommodityCalculatorRouter:
+    """LLM 기반 라우터를 사용한 유연한 계산기 시스템"""
+    
+    def __init__(self, llm: ChatOpenAI = None):
         self.conn = psycopg2.connect(
             host=os.environ.get("DB_HOST"),
             dbname=os.environ.get("DB_NAME"),
@@ -395,6 +412,55 @@ class CommodityCalculator:
         }
         self.acre_to_hectare = 0.4046856422
         self.hectare_to_acre = 2.47105
+        
+        # LLM 라우터 초기화
+        self.llm = llm or ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0,
+            openai_api_key=os.environ.get("OPENAI_API_KEY")
+        )
+        
+        # 라우터 프롬프트 설정
+        self.router_prompt = PromptTemplate(
+            input_variables=["query", "parsed_data"],
+            template="""
+            농산물 계산기 라우터입니다. 사용자의 질문을 분석하여 적절한 계산 기능을 식별하세요.
+
+            사용자 질문: {query}
+            파싱된 데이터: {parsed_data}
+
+            사용 가능한 기능들:
+            1. crush_margin - 크러시 마진 계산 (대두 관련 마진, 착유 마진 등)
+            2. unit_conversion - 수량 단위 변환 (부셸↔톤)
+            3. price_conversion - 가격 단위 변환 (USc/bu → USD/MT)
+            4. basis_calculation - 베이시스 계산 (선물가 + 베이시스 = 플랫가격)
+            5. area_conversion - 면적 변환 (에이커↔헥타르)
+            6. yield_conversion - 단수 변환 (bu/acre → ton/hectare)
+            7. fallback_calculation - 기본 계산 (위 기능에 해당하지 않는 경우)
+
+            다음 기준으로 판단하세요:
+            - 크러시, 착유, 마진, board crush 등이 언급되면 → crush_margin
+            - 부셸, 톤 등 수량 단위 변환 요청 → unit_conversion  
+            - USD/MT, 톤당 달러 등 가격 단위 변환 → price_conversion
+            - 베이시스, basis, 플랫가격 등 → basis_calculation
+            - 에이커, 헥타르 등 면적 단위 → area_conversion
+            - bu/acre, ton/hectare 등 단수 단위 → yield_conversion
+            - 위 조건에 해당하지 않으면 → fallback_calculation
+
+            응답은 오직 기능 이름만 반환하세요 (예: crush_margin)
+            """
+        )
+        
+        # 핸들러 매핑
+        self.handlers = {
+            "crush_margin": self.handle_crush_margin,
+            "unit_conversion": self.handle_unit_conversion,
+            "price_conversion": self.handle_price_conversion,
+            "basis_calculation": self.handle_basis_calculation,
+            "area_conversion": self.handle_area_conversion,
+            "yield_conversion": self.handle_yield_conversion,
+            "fallback_calculation": self.handle_fallback_calculation
+        }
 
     def get_commodity_id(self, name: str) -> int | None:
         return self.commodity_id_map.get(name.lower())
@@ -478,102 +544,177 @@ class CommodityCalculator:
         flat_price_uscbu = fut_price_uscbu + basis_cents
         return self.uscbushel_to_usdmt(flat_price_uscbu, commodity_id)
 
-    # [수정] 전체 계산 로직을 새로운 통합 파서(parse_query_details) 기반으로 재구성
     def calculate(self, query: str) -> str:
-        parsed = parse_query_details(query)
-        q = query.lower()
+        """LLM 라우터 기반 계산 시스템의 메인 엔트리 포인트"""
+        try:
+            # 1. 쿼리 파싱
+            parsed = parse_query_details(query)
+            
+            # 2. LLM 라우터로 적절한 기능 식별
+            function_name = self._route_to_function(query, parsed)
+            
+            # 3. 식별된 핸들러 실행
+            handler = self.handlers.get(function_name, self.handle_fallback_calculation)
+            return handler(query, parsed)
+            
+        except Exception as e:
+            return f"계산 중 오류가 발생했습니다: {str(e)}"
+    
+    def _route_to_function(self, query: str, parsed_data: Dict[str, Any]) -> str:
+        """LLM을 사용하여 쿼리를 적절한 계산 기능으로 라우팅"""
+        try:
+            # 라우터 프롬프트 실행
+            formatted_prompt = self.router_prompt.format(
+                query=query,
+                parsed_data=str(parsed_data)
+            )
+            
+            response = self.llm.invoke(formatted_prompt)
+            function_name = response.content.strip()
+            
+            # 유효한 기능 이름인지 확인
+            if function_name in self.handlers:
+                return function_name
+            else:
+                print(f"Unknown function returned by router: {function_name}, falling back to fallback_calculation")
+                return "fallback_calculation"
+                
+        except Exception as e:
+            print(f"Router error: {e}, falling back to fallback_calculation")
+            return "fallback_calculation"
+    # === 계산 기능별 핸들러 메서드들 ===
+    
+    def handle_crush_margin(self, query: str, parsed: Dict[str, Any]) -> str:
+        """크러시 마진 계산 핸들러"""
+        dates = parsed.get("dates", [])
         
+        if len(dates) >= 2:  # 날짜 2개 비교
+            margin1_data = self.board_crush_margin(dates[0])
+            margin2_data = self.board_crush_margin(dates[1])
+            if margin1_data and margin2_data:
+                margin1, margin2 = margin1_data[0], margin2_data[0]
+                diff = round(margin2 - margin1, 2)
+                pct = round(diff / abs(margin1) * 100, 2) if margin1 != 0 else 0
+                return (
+                    f"[대두 크러시 마진 비교]\n"
+                    f"- {dates[0]}: ${margin1} /bu\n"
+                    f"- {dates[1]}: ${margin2} /bu\n"
+                    f"- 변화: ${diff} /bu ({pct}%)"
+                )
+            return "두 날짜의 데이터가 모두 필요하여 크러시 마진을 비교할 수 없습니다."
+        else:  # 날짜 1개 또는 미지정
+            target_date = dates[0] if dates else None
+            margin_data = self.board_crush_margin(target_date)
+            if margin_data:
+                # 실제 가격 날짜 조회를 위해 fetch_price 사용
+                _, price_date = self.fetch_price(self.get_commodity_id("soybean"), target_date)
+                return f"[{price_date or '최근'} 기준] 대두 크러시 마진: ${margin_data[0]} /bu"
+            return "데이터가 부족해 크러시 마진을 계산할 수 없습니다."
+    
+    def handle_unit_conversion(self, query: str, parsed: Dict[str, Any]) -> str:
+        """수량 단위 변환 핸들러 (부셸↔톤)"""
         comm_name = parsed.get("commodity_name")
         comm_id = self.get_commodity_id(comm_name) if comm_name else None
-
-        # 1. 크러시 마진 계산 (대두 관련 키워드 있을 시)
-        if "크러시" in q and "마진" in q:
-            dates = parsed.get("dates", [])
-            if len(dates) >= 2: # 날짜 2개 비교
-                margin1_data = self.board_crush_margin(dates[0])
-                margin2_data = self.board_crush_margin(dates[1])
-                if margin1_data and margin2_data:
-                    margin1, margin2 = margin1_data[0], margin2_data[0]
-                    diff = round(margin2 - margin1, 2)
-                    pct = round(diff / abs(margin1) * 100, 2) if margin1 != 0 else 0
-                    return (
-                        f"[대두 크러시 마진 비교]\n"
-                        f"- {dates[0]}: ${margin1} /bu\n"
-                        f"- {dates[1]}: ${margin2} /bu\n"
-                        f"- 변화: ${diff} /bu ({pct}%)"
-                    )
-                return "두 날짜의 데이터가 모두 필요하여 크러시 마진을 비교할 수 없습니다."
-            else: # 날짜 1개 또는 미지정
-                target_date = dates[0] if dates else None
-                margin_data = self.board_crush_margin(target_date)
-                if margin_data:
-                    price_date, _ = self.fetch_price(self.get_commodity_id("soybean"), target_date) # 실제 가격 날짜 조회
-                    return f"[{price_date or '최근'} 기준] 대두 크러시 마진: ${margin_data[0]} /bu"
-                return "데이터가 부족해 크러시 마진을 계산할 수 없습니다."
-
-        # [신규/수정] 2. 수량 단위 변환 (부셸↔톤)
-        if comm_id and parsed.get("value") is not None and parsed.get("unit") in ["bushels", "bu", "부셸", "톤", "ton"]:
-            value = parsed["value"]
-            unit = parsed["unit"]
-            
-            if unit in ["bushels", "bu", "부셸"]: # 부셸 -> 톤
-                converted = self.bushel_to_ton(value, comm_id)
-                if converted:
-                    return f"[{comm_name}] {value:,.2f} 부셸(bu) = {converted:,.4f} 톤(ton)"
-                return f"{comm_name} 품목은 부셸-톤 변환을 지원하지 않습니다."
-            
-            elif unit in ["톤", "ton"]: # 톤 -> 부셸
-                converted = self.ton_to_bushel(value, comm_id)
-                if converted:
-                    return f"[{comm_name}] {value:,.2f} 톤(ton) = {converted:,.4f} 부셸(bu)"
-                return f"{comm_name} 품목은 톤-부셸 변환을 지원하지 않습니다."
-
-        # 3. 가격 단위 변환 (USc/bu → USD/MT)
-        if comm_id and "usd/mt" in q or "톤당 달러" in q:
-            price, price_date = self.fetch_price(comm_id)
-            if price and price_date:
-                usdmt = self.uscbushel_to_usdmt(price, comm_id)
-                return (
-                    f"[{comm_name} 가격 변환 ({price_date} 기준)]\n"
-                    f"- 선물가: {price} USc/bu\n"
-                    f"- 변환가: ${usdmt} /MT"
-                )
-            return f"{comm_name} 가격 정보가 없습니다."
-
-        # 4. 베이시스 플랫 가격 계산
-        basis_match = re.search(r"(베이시스|basis)\s*([+-]?\d+)", q)
-        if comm_id and basis_match:
-            basis = float(basis_match.group(2))
-            price, price_date = self.fetch_price(comm_id)
-            if price and price_date:
-                flat_price = self.basis_to_flat(price, basis, comm_id)
-                return (
-                    f"[{comm_name} 플랫가격 ({price_date} 기준)]\n"
-                    f"- 최근 선물: {price} USc/bu\n"
-                    f"- 베이시스: {basis} cents\n"
-                    f"- 플랫가격: ${flat_price} /MT"
-                )
-            return f"{comm_name} 선물 가격 정보가 없어 플랫가격을 계산할 수 없습니다."
-
-        # 5. 면적 변환 (에이커↔헥타르)
-        if parsed.get("value") is not None and parsed.get("unit") in ["acres", "에이커", "hectare", "헥타르"]:
-            value = parsed["value"]
-            unit = parsed["unit"]
-            if unit in ["acres", "에이커"]:
-                hectare = self.acre_to_hectare_func(value)
-                return f"[면적 변환] {value:,.2f} 에이커(acres) = {hectare:,.2f} 헥타르(hectare)"
-            else: # hectare, 헥타르
-                acre = self.hectare_to_acre_func(value)
-                return f"[면적 변환] {value:,.2f} 헥타르(hectare) = {acre:,.2f} 에이커(acres)"
         
-        # 6. 단수 변환 (bu/acre → ton/hectare)
-        if comm_id and parsed.get("value") is not None and parsed.get("unit") in ["bushels per acre", "bu/acre"]:
-            yield_bu_acre = parsed["value"]
-            ton_hectare = self.yield_bu_acre_to_ton_hectare(yield_bu_acre, comm_id)
-            if ton_hectare:
-                return f"[{comm_name} 단수 변환] {yield_bu_acre} bu/acre = {ton_hectare} ton/hectare"
-
-        # [신규] Fallback: 기본 단위 변환 및 계산을 LLM 지식으로 처리
+        if not comm_id or parsed.get("value") is None:
+            return "품목명과 수량을 명확히 지정해주세요."
+        
+        value = parsed["value"]
+        unit = parsed.get("unit", "")
+        
+        if unit in ["bushels", "bu", "부셸"]:  # 부셸 -> 톤
+            converted = self.bushel_to_ton(value, comm_id)
+            if converted:
+                return f"[{comm_name}] {value:,.2f} 부셸(bu) = {converted:,.4f} 톤(ton)"
+            return f"{comm_name} 품목은 부셸-톤 변환을 지원하지 않습니다."
+        
+        elif unit in ["톤", "ton"]:  # 톤 -> 부셸
+            converted = self.ton_to_bushel(value, comm_id)
+            if converted:
+                return f"[{comm_name}] {value:,.2f} 톤(ton) = {converted:,.4f} 부셸(bu)"
+            return f"{comm_name} 품목은 톤-부셸 변환을 지원하지 않습니다."
+        
+        return "지원하지 않는 단위입니다. 부셸(bu) 또는 톤(ton)을 사용해주세요."
+    
+    def handle_price_conversion(self, query: str, parsed: Dict[str, Any]) -> str:
+        """가격 단위 변환 핸들러 (USc/bu → USD/MT)"""
+        comm_name = parsed.get("commodity_name")
+        comm_id = self.get_commodity_id(comm_name) if comm_name else None
+        
+        if not comm_id:
+            return "품목명을 명확히 지정해주세요."
+        
+        price, price_date = self.fetch_price(comm_id)
+        if price and price_date:
+            usdmt = self.uscbushel_to_usdmt(price, comm_id)
+            return (
+                f"[{comm_name} 가격 변환 ({price_date} 기준)]\n"
+                f"- 선물가: {price} USc/bu\n"
+                f"- 변환가: ${usdmt} /MT"
+            )
+        return f"{comm_name} 가격 정보가 없습니다."
+    
+    def handle_basis_calculation(self, query: str, parsed: Dict[str, Any]) -> str:
+        """베이시스 계산 핸들러"""
+        comm_name = parsed.get("commodity_name")
+        comm_id = self.get_commodity_id(comm_name) if comm_name else None
+        
+        if not comm_id:
+            return "품목명을 명확히 지정해주세요."
+        
+        # 베이시스 값 추출
+        q = query.lower()
+        basis_match = re.search(r"(베이시스|basis)\s*([+-]?\d+)", q)
+        if not basis_match:
+            return "베이시스 값을 명확히 지정해주세요. (예: 베이시스 +20)"
+        
+        basis = float(basis_match.group(2))
+        price, price_date = self.fetch_price(comm_id)
+        if price and price_date:
+            flat_price = self.basis_to_flat(price, basis, comm_id)
+            return (
+                f"[{comm_name} 플랫가격 ({price_date} 기준)]\n"
+                f"- 최근 선물: {price} USc/bu\n"
+                f"- 베이시스: {basis} cents\n"
+                f"- 플랫가격: ${flat_price} /MT"
+            )
+        return f"{comm_name} 선물 가격 정보가 없어 플랫가격을 계산할 수 없습니다."
+    
+    def handle_area_conversion(self, query: str, parsed: Dict[str, Any]) -> str:
+        """면적 변환 핸들러 (에이커↔헥타르)"""
+        if parsed.get("value") is None or parsed.get("unit") not in ["acres", "에이커", "hectare", "헥타르"]:
+            return "면적 수량과 단위(에이커 또는 헥타르)를 명확히 지정해주세요."
+        
+        value = parsed["value"]
+        unit = parsed["unit"]
+        
+        if unit in ["acres", "에이커"]:
+            hectare = self.acre_to_hectare_func(value)
+            return f"[면적 변환] {value:,.2f} 에이커(acres) = {hectare:,.2f} 헥타르(hectare)"
+        else:  # hectare, 헥타르
+            acre = self.hectare_to_acre_func(value)
+            return f"[면적 변환] {value:,.2f} 헥타르(hectare) = {acre:,.2f} 에이커(acres)"
+    
+    def handle_yield_conversion(self, query: str, parsed: Dict[str, Any]) -> str:
+        """단수 변환 핸들러 (bu/acre → ton/hectare)"""
+        comm_name = parsed.get("commodity_name")
+        comm_id = self.get_commodity_id(comm_name) if comm_name else None
+        
+        if not comm_id:
+            return "품목명을 명확히 지정해주세요."
+        
+        if parsed.get("value") is None or parsed.get("unit") not in ["bushels per acre", "bu/acre"]:
+            return "단수 값과 단위(bu/acre)를 명확히 지정해주세요."
+        
+        yield_bu_acre = parsed["value"]
+        ton_hectare = self.yield_bu_acre_to_ton_hectare(yield_bu_acre, comm_id)
+        if ton_hectare:
+            return f"[{comm_name} 단수 변환] {yield_bu_acre} bu/acre = {ton_hectare} ton/hectare"
+        
+        return f"{comm_name} 품목은 단수 변환을 지원하지 않습니다."
+    
+    def handle_fallback_calculation(self, query: str, parsed: Dict[str, Any]) -> str:
+        """기본 계산 및 폴백 처리 핸들러"""
         return self._fallback_calculation(query, parsed)
     
     def _fallback_calculation(self, query: str, parsed: Dict[str, Any]) -> str:
@@ -635,6 +776,10 @@ class CommodityCalculator:
             )
         
         return "계산에 필요한 정보(품목, 수량, 단위)를 명확히 지정해주세요."
+
+
+# 하위 호환성을 위한 별칭
+CommodityCalculator = CommodityCalculatorRouter
 
 
 def create_agent_tools(documents: List[Document], llm: ChatOpenAI):
@@ -741,18 +886,21 @@ def create_agent_tools(documents: List[Document], llm: ChatOpenAI):
         )
     )
 
-    # 11. 계산기 도구 생성
-    calculator = CommodityCalculator()
+    # 11. 계산기 도구 생성 (LLM 라우터 기반)
+    calculator = CommodityCalculatorRouter(llm=llm)
     calc_tool = Tool(
         name="Commodity Calculator",
         func=calculator.calculate,
         description=(
-            "농산물 관련 단위 변환 및 계산을 수행합니다. 수량, 면적, 단수, 가격 변환, 크러시 마진, 베이시스 계산을 지원합니다.\n"
-            "사용 예시:\n"
-            "- 수량 변환: '옥수수 150 부셸은 몇 톤이야?', '밀 200톤을 부셸로'\n"
-            "- 가격 변환: '최근 옥수수 가격 톤당 달러로 얼마야?'\n"
-            "- 면적/단수: '95.2 million acres를 헥타르로', '183.1 bushels per acre를 톤/헥타르로'\n"
-            "- 마진/베이시스: '어제랑 오늘 크러시 마진 비교해줘', '옥수수 베이시스 +20일때 플랫가격은?'"
+            "LLM 라우터 기반 농산물 계산기입니다. 자연어를 이해하여 적절한 계산 기능을 자동 선택합니다.\n"
+            "지원 기능:\n"
+            "- 크러시 마진: '대두 착유 마진 계산해줘', 'soybean crush margin 비교'\n"
+            "- 수량 변환: '옥수수 150 부셸을 톤으로', '밀 200톤을 부셸로 변환'\n" 
+            "- 가격 변환: '최근 옥수수 가격을 톤당 달러로', '밀 선물가격 USD/MT로'\n"
+            "- 면적 변환: '95.2 million acres를 헥타르로', '1000 헥타르를 에이커로'\n"
+            "- 단수 변환: '183.1 bushels per acre를 톤/헥타르로'\n"
+            "- 베이시스 계산: '옥수수 베이시스 +20일때 플랫가격', '밀 basis -15 flat price'\n"
+            "다양한 언어와 표현 방식을 지원하며, 계산 의도를 자동으로 파악합니다."
         )
     )
 
