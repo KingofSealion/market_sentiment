@@ -1199,6 +1199,14 @@ export default function AgriCommoditiesDashboard() {
   };
 
   const renderNewsArticles = () => {
+    // 중복 기사 제거 (ID 기준으로 중복 제거)
+    const uniqueNewsArticles = newsArticles.reduce((acc, article) => {
+      if (!acc.find(item => item.id === article.id)) {
+        acc.push(article);
+      }
+      return acc;
+    }, [] as NewsArticle[]);
+    
     if (isLoadingNews) {
       return (
         <Card sx={{ height: 1000, display: 'flex', flexDirection: 'column' }}>
@@ -1225,7 +1233,7 @@ export default function AgriCommoditiesDashboard() {
             📰 최근 뉴스 & 분석 - {selectedCommodity}
           </Typography>
           
-          {newsArticles.length === 0 ? (
+          {uniqueNewsArticles.length === 0 ? (
             <Alert severity="info">
               표시할 기사가 없습니다.
             </Alert>
@@ -1258,7 +1266,7 @@ export default function AgriCommoditiesDashboard() {
               scrollbarWidth: 'thin',
               scrollbarColor: '#bbb #f5f5f5',
             }}>
-              {newsArticles.map((article, index) => (
+              {uniqueNewsArticles.map((article, index) => (
                 <Card
                   key={`${article.id}-${index}`}
                   variant="outlined"

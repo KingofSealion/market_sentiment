@@ -42,7 +42,7 @@ def run_bot():
     # 수동으로 관리할 필요가 없습니다. AgentExecutor가 알아서 대화 기록을 memory 객체에 추가하고 관리합니다.
     
     print("\n" + "="*60)
-    print("🤖 원자재 애널리스트 봇(v1.0 - RAG+SQL 하이브리드)이 준비되었습니다.")
+    print("🤖 원자재 애널리스트 봇이 준비되었습니다.")
     print("   📊 정확한 날짜+품목 데이터: SQL 검색")
     print("   📰 시장 동향+뉴스 맥락: RAG 검색")
     print("   💡 예시: '2025년 7월 10일 옥수수 감정점수는?'")
@@ -50,7 +50,7 @@ def run_bot():
     print("="*60)
 
     while True:
-        user_input = input("👤 당신: ")
+        user_input = input("👤 사용자: ")
         if user_input.lower() == 'exit':
             print("🤖 봇을 종료합니다.")
             break
