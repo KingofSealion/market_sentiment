@@ -28,3 +28,7 @@ aiofiles==23.2.1
 # Development and Testing
 pytest==7.4.3
 pytest-asyncio==0.21.1
+
+# Streamlit Dashboard
+streamlit>=1.32.0
+plotly>=5.17.0

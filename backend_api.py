@@ -21,6 +21,9 @@ from langchain_openai import ChatOpenAI
 
 from dotenv import load_dotenv  
 import re
+import httpx
+
+
 load_dotenv()
 
 app = FastAPI(title="Agri Commodities Sentiment Dashboard API", version="1.0.0")
@@ -93,7 +96,8 @@ async def startup_event():
         
         # Initialize LLM
         print("[INFO] Initializing ChatOpenAI model...")
-        llm = ChatOpenAI(model="gpt-4.1", temperature=0.3)
+        custom_client = httpx.Client(verify=False) #회사에서 API 사용위해 넣어야하는 코드줄
+        llm = ChatOpenAI(model="gpt-4.1", temperature=0.3, http_client=custom_client)
         print("[INFO] ChatOpenAI model initialized")
         
         # Load documents from PostgreSQL

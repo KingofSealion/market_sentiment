@@ -8,6 +8,7 @@ from app.tools import create_agent_tools
 from app.agent_logic import create_analyst_agent
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage, HumanMessage
+import httpx
 
 def run_bot():
     """농산물 시장 전문 AI 애널리스트 봇 실행 (main 함수)"""
@@ -18,8 +19,9 @@ def run_bot():
         return
 
     # 2. 모델 선택 
+    custom_client = httpx.Client(verify=False) #회사에서 API 사용위해 넣어야하는 코드줄
     model_name = "gpt-4.1"
-    llm = ChatOpenAI(model=model_name, temperature=0.3)
+    llm = ChatOpenAI(model=model_name, temperature=0.3, http_client=custom_client)
     print(f"[INFO] OpenAI 모델: {model_name}")
 
     # 3. 데이터 로딩 (DB → 문서 객체)
